@@ -102,10 +102,22 @@ ros2 run drone_figure8 yolo_detector --model /path/to/yolo11n.pt
 The default model path in the code points to the original development machine,
 so passing `--model` is recommended on a new computer.
 
-To publish detected target centers for the laser controller:
+To aim the laser at detected target centers, start the laser controller in a
+separate terminal:
 
 ```bash
-ros2 run drone_figure8 yolo_detector --model /path/to/yolo11n.pt --ros-args
+cd /home/rzfly/drone_ws
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+ros2 run drone_figure8 laser_controller
+```
+
+Then start YOLO detection and publish target centers:
+
+```bash
+/home/rzfly/drone_ws/yolo_venv/bin/python3 \
+  /home/rzfly/drone_ws/src/drone_figure8/drone_figure8/yolo_detector.py \
+  --model /path/to/yolo11n.pt --prediction-time 0.15
 ```
 
 ## Package Layout
