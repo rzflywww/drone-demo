@@ -1,0 +1,413 @@
+<?xml version="1.0" ?>
+<sdf version="1.8">
+  <world name="drone_world">
+
+    <!-- ===== 物理引擎 ===== -->
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <!-- ===== 插件 ===== -->
+    <plugin
+      filename="gz-sim-user-commands-system"
+      name="gz::sim::systems::UserCommands">
+    </plugin>
+    <plugin
+      filename="gz-sim-physics-system"
+      name="gz::sim::systems::Physics">
+    </plugin>
+    <plugin
+      filename="gz-sim-scene-broadcaster-system"
+      name="gz::sim::systems::SceneBroadcaster">
+    </plugin>
+    <plugin
+      filename="gz-sim-sensors-system"
+      name="gz::sim::systems::Sensors">
+    </plugin>
+
+    <!-- ===== 光源 ===== -->
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <!-- ===== 地面 ===== -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>100 100</size>
+            </plane>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>100 100</size>
+            </plane>
+          </geometry>
+          <material>
+            <ambient>0.3 0.3 0.3</ambient>
+            <diffuse>0.6 0.6 0.6</diffuse>
+            <specular>0.1 0.1 0.1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ===== 四旋翼无人机 ===== -->
+    <model name="quadcopter">
+      <pose>0 0 2.0 0 0 0</pose>
+      <link name="base_link">
+        <!-- 中心机身 -->
+        <visual name="body">
+          <cast_shadows>false</cast_shadows>
+          <geometry>
+            <box>
+              <size>0.30 0.30 0.06</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.2 0.2 0.2 1</ambient>
+            <diffuse>0.3 0.3 0.3 1</diffuse>
+          </material>
+        </visual>
+
+        <!-- 机臂 1: +X 方向 -->
+        <visual name="arm_front">
+          <cast_shadows>false</cast_shadows>
+          <pose>0.15 0 0 0 0 0.785</pose>
+          <geometry>
+            <box>
+              <size>0.30 0.02 0.02</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.8 0.2 0.2 1</ambient>
+            <diffuse>0.8 0.2 0.2 1</diffuse>
+          </material>
+        </visual>
+
+        <!-- 机臂 2: -X 方向 -->
+        <visual name="arm_back">
+          <cast_shadows>false</cast_shadows>
+          <pose>-0.15 0 0 0 0 0.785</pose>
+          <geometry>
+            <box>
+              <size>0.30 0.02 0.02</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.8 0.2 0.2 1</ambient>
+            <diffuse>0.8 0.2 0.2 1</diffuse>
+          </material>
+        </visual>
+
+        <!-- 机臂 3: +Y 方向 -->
+        <visual name="arm_left">
+          <cast_shadows>false</cast_shadows>
+          <pose>0 0.15 0 0 0 -0.785</pose>
+          <geometry>
+            <box>
+              <size>0.30 0.02 0.02</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.8 0.2 0.2 1</ambient>
+            <diffuse>0.8 0.2 0.2 1</diffuse>
+          </material>
+        </visual>
+
+        <!-- 机臂 4: -Y 方向 -->
+        <visual name="arm_right">
+          <cast_shadows>false</cast_shadows>
+          <pose>0 -0.15 0 0 0 -0.785</pose>
+          <geometry>
+            <box>
+              <size>0.30 0.02 0.02</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.8 0.2 0.2 1</ambient>
+            <diffuse>0.8 0.2 0.2 1</diffuse>
+          </material>
+        </visual>
+
+        <!-- 电机 1 -->
+        <visual name="motor_1">
+          <cast_shadows>false</cast_shadows>
+          <pose>0.18 0.18 0.04 0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.035</radius>
+              <length>0.03</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.5 0.5 0.5 1</ambient>
+            <diffuse>0.5 0.5 0.5 1</diffuse>
+          </material>
+        </visual>
+
+        <!-- 电机 2 -->
+        <visual name="motor_2">
+          <cast_shadows>false</cast_shadows>
+          <pose>-0.18 -0.18 0.04 0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.035</radius>
+              <length>0.03</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.5 0.5 0.5 1</ambient>
+            <diffuse>0.5 0.5 0.5 1</diffuse>
+          </material>
+        </visual>
+
+        <!-- 电机 3 -->
+        <visual name="motor_3">
+          <cast_shadows>false</cast_shadows>
+          <pose>0.18 -0.18 0.04 0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.035</radius>
+              <length>0.03</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.5 0.5 0.5 1</ambient>
+            <diffuse>0.5 0.5 0.5 1</diffuse>
+          </material>
+        </visual>
+
+        <!-- 电机 4 -->
+        <visual name="motor_4">
+          <cast_shadows>false</cast_shadows>
+          <pose>-0.18 0.18 0.04 0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.035</radius>
+              <length>0.03</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.5 0.5 0.5 1</ambient>
+            <diffuse>0.5 0.5 0.5 1</diffuse>
+          </material>
+        </visual>
+
+        <!-- 螺旋桨 1 -->
+        <visual name="propeller_1">
+          <cast_shadows>false</cast_shadows>
+          <pose>0.18 0.18 0.06 0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.14</radius>
+              <length>0.004</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.1 0.1 0.1 0.7</ambient>
+            <diffuse>0.1 0.1 0.1 0.7</diffuse>
+          </material>
+        </visual>
+
+        <!-- 螺旋桨 2 -->
+        <visual name="propeller_2">
+          <cast_shadows>false</cast_shadows>
+          <pose>-0.18 -0.18 0.06 0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.14</radius>
+              <length>0.004</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.1 0.1 0.1 0.7</ambient>
+            <diffuse>0.1 0.1 0.1 0.7</diffuse>
+          </material>
+        </visual>
+
+        <!-- 螺旋桨 3 -->
+        <visual name="propeller_3">
+          <cast_shadows>false</cast_shadows>
+          <pose>0.18 -0.18 0.06 0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.14</radius>
+              <length>0.004</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.1 0.1 0.1 0.7</ambient>
+            <diffuse>0.1 0.1 0.1 0.7</diffuse>
+          </material>
+        </visual>
+
+        <!-- 螺旋桨 4 -->
+        <visual name="propeller_4">
+          <cast_shadows>false</cast_shadows>
+          <pose>-0.18 0.18 0.06 0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.14</radius>
+              <length>0.004</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.1 0.1 0.1 0.7</ambient>
+            <diffuse>0.1 0.1 0.1 0.7</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ===== 地面摄像机 ===== -->
+    <!-- 放置在地面上，斜向上拍摄无人机 8 字飞行区域 -->
+    <model name="ground_camera">
+      <static>true</static>
+      <pose>8.0 -8.0 1.5 0 0.044 2.356</pose>
+      <!-- 位置: (8,-8,1.5) 地面高度1.5m -->
+      <!-- 朝向: roll=0 pitch≈2.5° yaw=135° → 精确对准原点飞行中心 -->
+
+      <link name="camera_link">
+        <!-- 摄像机可视化外壳 -->
+        <visual name="camera_body">
+          <pose>0 0 0 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.15 0.3 0.15</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.1 0.1 0.1 1</ambient>
+            <diffuse>0.2 0.2 0.2 1</diffuse>
+          </material>
+        </visual>
+
+        <!-- 镜头可视化 -->
+        <visual name="lens">
+          <pose>0.15 0 0 0 1.57 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.05</radius>
+              <length>0.08</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.05 0.05 0.05 1</ambient>
+            <diffuse>0.05 0.05 0.05 1</diffuse>
+          </material>
+        </visual>
+
+        <!-- 三脚架 -->
+        <visual name="tripod_leg_1">
+          <pose>0 -0.08 -0.3 0.3 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.02</radius>
+              <length>0.60</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.3 0.3 0.3 1</ambient>
+            <diffuse>0.3 0.3 0.3 1</diffuse>
+          </material>
+        </visual>
+
+        <visual name="tripod_leg_2">
+          <pose>0.07 0.08 -0.3 -0.3 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.02</radius>
+              <length>0.60</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.3 0.3 0.3 1</ambient>
+            <diffuse>0.3 0.3 0.3 1</diffuse>
+          </material>
+        </visual>
+
+        <visual name="tripod_leg_3">
+          <pose>-0.07 0.08 -0.3 -0.3 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.02</radius>
+              <length>0.60</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.3 0.3 0.3 1</ambient>
+            <diffuse>0.3 0.3 0.3 1</diffuse>
+          </material>
+        </visual>
+
+        <!-- 摄像机传感器 -->
+        <sensor name="camera_sensor" type="camera">
+          <pose>0.15 0 0.05 0 0 0</pose>
+          <always_on>true</always_on>
+          <update_rate>30</update_rate>
+          <visualize>true</visualize>
+          <topic>ground_camera</topic>
+          <camera>
+            <horizontal_fov>1.047</horizontal_fov>
+            <image>
+              <width>1280</width>
+              <height>720</height>
+              <format>R8G8B8</format>
+            </image>
+            <clip>
+              <near>0.1</near>
+              <far>100</far>
+            </clip>
+          </camera>
+
+          <!-- 视频录制插件 -->
+          <plugin
+            filename="gz-sim-camera-video-recorder-system"
+            name="gz::sim::systems::CameraVideoRecorder">
+            <service>ground_camera/record_video</service>
+          </plugin>
+
+        </sensor>
+      </link>
+    </model>
+
+    <!-- ===== 激光束 ===== -->
+    <!-- 从地面摄像机指向无人机的可视激光束，由 figure8_controller 控制 -->
+    <model name="laser_beam">
+      <static>false</static>
+      <pose>0 0 -100 0 0 0</pose>
+
+      <link name="beam_link">
+        <visual name="beam">
+          <cast_shadows>false</cast_shadows>
+          <pose>0 0 7.7 0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.001</radius>
+              <length>15.0</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0 1 0 1</ambient>
+            <diffuse>0 1 0 1</diffuse>
+            <specular>0.5 0.5 0.5 1</specular>
+            <emissive>0 1 0 1</emissive>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+  </world>
+</sdf>
