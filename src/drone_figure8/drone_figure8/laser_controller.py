@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """激光指示器控制器 - 从地面摄像机指向图像中的像素位置。
 
-独立节点，按需启动。输入地面摄像机画面中的像素坐标，例如 1280x720
-画面的中心点 (640, 360)，节点会把该像素反投影成世界坐标系下的射线，
+独立节点，按需启动。输入地面摄像机画面中的像素坐标，例如 640x360
+画面的中心点 (320, 180)，节点会把该像素反投影成世界坐标系下的射线，
 然后用 SetEntityState 将 laser_beam 模型定位到摄像机处并指向该方向。
 
 用法（在另一个终端中执行）:
-    ros2 run drone_figure8 laser_controller --ros-args -p target_x:=640 -p target_y:=360
-    ros2 topic pub --once /laser_target_pixel geometry_msgs/msg/Point "{x: 640.0, y: 360.0, z: 0.0}"
+    ros2 run drone_figure8 laser_controller --ros-args -p target_x:=320 -p target_y:=180
+    ros2 topic pub --once /laser_target_pixel geometry_msgs/msg/Point "{x: 320.0, y: 180.0, z: 0.0}"
     # Ctrl+C 停止后激光束会被隐藏
 """
 
@@ -87,10 +87,10 @@ class LaserController(Node):
         self.declare_parameter("rate", 50.0, numeric_parameter)
         self.rate = self.get_parameter("rate").value
 
-        self.declare_parameter("target_x", 640.0, numeric_parameter)
-        self.declare_parameter("target_y", 360.0, numeric_parameter)
-        self.declare_parameter("image_width", 1280.0, numeric_parameter)
-        self.declare_parameter("image_height", 720.0, numeric_parameter)
+        self.declare_parameter("target_x", 320.0, numeric_parameter)
+        self.declare_parameter("target_y", 180.0, numeric_parameter)
+        self.declare_parameter("image_width", 640.0, numeric_parameter)
+        self.declare_parameter("image_height", 360.0, numeric_parameter)
         self.declare_parameter("horizontal_fov", 1.047, numeric_parameter)
         self.declare_parameter("target_y_offset", 0.0, numeric_parameter)
 

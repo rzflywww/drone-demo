@@ -17,7 +17,9 @@ Usage:
 """
 
 import argparse
+import sys
 import time
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -32,6 +34,124 @@ DEFAULT_MODEL = "/home/rzfly/ultralytics-8.3.39/ultralytics/yolo11n.pt"
 DEFAULT_TOPIC = "/ground_camera"
 DEFAULT_CONF = 0.25
 DEFAULT_TARGET_TOPIC = "/laser_target_pixel"
+DEFAULT_PREDICTION_TIME = 0.15
+YOLO_VENV_SITE_PACKAGES = Path(
+    "/home/rzfly/drone_ws/yolo_venv/lib/python3.12/site-packages"
+)
+
+
+def import_yolo(model_path):
+    if YOLO_VENV_SITE_PACKAGES.exists():
+        site_packages = str(YOLO_VENV_SITE_PACKAGES)
+        if site_packages not in sys.path:
+            sys.path.insert(0, site_packages)
+
+    try:
+        from ultralytics import YOLO
+
+        return YOLO
+    except ModuleNotFoundError as exc:
+        if exc.name != "ultralytics":
+            raise
+
+    candidates = [
+        Path(DEFAULT_MODEL).expanduser().resolve().parents[1],
+        Path(model_path).expanduser().resolve().parents[1],
+    ]
+    for candidate in candidates:
+        if (candidate / "ultralytics" / "__init__.py").exists():
+            candidate_text = str(candidate)
+            if candidate_text not in sys.path:
+                sys.path.insert(0, candidate_text)
+            from ultralytics import YOLO
+
+            print(f"Using local Ultralytics source: {candidate_text}")
+            return YOLO
+
+    raise ModuleNotFoundError(
+        "No module named 'ultralytics'. Install it with `pip install ultralytics` "
+        "or place the Ultralytics source tree at /home/rzfly/ultralytics-8.3.39."
+    )
+
+
+class PixelKalmanFilter:
+    """Constant-velocity Kalman filter for image-space target centers."""
+
+    def __init__(self, process_noise=800.0, measurement_noise=25.0):
+        self.process_noise = float(process_noise)
+        self.measurement_noise = float(measurement_noise)
+        self.initialized = False
+        self.last_time = None
+        self.state = np.zeros((4, 1), dtype=np.float64)
+        self.covariance = np.eye(4, dtype=np.float64) * 1000.0
+
+    def reset(self):
+        self.initialized = False
+        self.last_time = None
+        self.state.fill(0.0)
+        self.covariance = np.eye(4, dtype=np.float64) * 1000.0
+
+    def update(self, x, y, timestamp):
+        if not self.initialized:
+            self.state = np.array([[x], [y], [0.0], [0.0]], dtype=np.float64)
+            self.covariance = np.diag([25.0, 25.0, 2500.0, 2500.0]).astype(np.float64)
+            self.initialized = True
+            self.last_time = timestamp
+            return
+
+        dt = max(1e-3, min(timestamp - self.last_time, 1.0))
+        self.last_time = timestamp
+
+        transition = np.array(
+            [
+                [1.0, 0.0, dt, 0.0],
+                [0.0, 1.0, 0.0, dt],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+        dt2 = dt * dt
+        dt3 = dt2 * dt
+        dt4 = dt2 * dt2
+        q = self.process_noise
+        process = q * np.array(
+            [
+                [dt4 / 4.0, 0.0, dt3 / 2.0, 0.0],
+                [0.0, dt4 / 4.0, 0.0, dt3 / 2.0],
+                [dt3 / 2.0, 0.0, dt2, 0.0],
+                [0.0, dt3 / 2.0, 0.0, dt2],
+            ],
+            dtype=np.float64,
+        )
+
+        self.state = transition @ self.state
+        self.covariance = transition @ self.covariance @ transition.T + process
+
+        measurement = np.array([[x], [y]], dtype=np.float64)
+        observation = np.array(
+            [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+            ],
+            dtype=np.float64,
+        )
+        noise = np.eye(2, dtype=np.float64) * self.measurement_noise
+        residual = measurement - observation @ self.state
+        residual_cov = observation @ self.covariance @ observation.T + noise
+        gain = self.covariance @ observation.T @ np.linalg.inv(residual_cov)
+
+        self.state = self.state + gain @ residual
+        identity = np.eye(4, dtype=np.float64)
+        self.covariance = (identity - gain @ observation) @ self.covariance
+
+    def predict(self, lead_time):
+        if not self.initialized:
+            return None
+        lead_time = max(0.0, float(lead_time))
+        x = self.state[0, 0] + self.state[2, 0] * lead_time
+        y = self.state[1, 0] + self.state[3, 0] * lead_time
+        return float(x), float(y)
 
 
 class YOLODetector:
@@ -46,6 +166,9 @@ class YOLODetector:
         publish_target,
         class_id,
         class_name,
+        prediction_time,
+        kalman_process_noise,
+        kalman_measurement_noise,
     ):
         self.topic = topic
         self.conf_threshold = conf_threshold
@@ -53,6 +176,8 @@ class YOLODetector:
         self.publish_target = publish_target
         self.class_id = class_id
         self.class_name = class_name.lower() if class_name else None
+        self.prediction_time = max(0.0, float(prediction_time))
+        self.kalman = PixelKalmanFilter(kalman_process_noise, kalman_measurement_noise)
         self.frame_count = 0
         self.fps = 0.0
         self._last_fps_time = time.time()
@@ -67,8 +192,7 @@ class YOLODetector:
             print(f"Publishing YOLO target centers to {self.target_topic}")
 
         # Load YOLO model
-        from ultralytics import YOLO
-
+        YOLO = import_yolo(model_path)
         self.model = YOLO(model_path)
         self.class_names = self.model.names
         print(f"YOLO model loaded: {model_path} ({len(self.class_names)} classes)")
@@ -81,6 +205,10 @@ class YOLODetector:
             callback=self._image_callback,
         )
         print(f"Subscribed to {self.topic}, waiting for frames...")
+        if self.prediction_time > 0.0:
+            print(f"Kalman prediction enabled: lead_time={self.prediction_time:.3f}s")
+        else:
+            print("Kalman prediction disabled")
 
         # Latest frame storage (thread-safe via GIL for CPython)
         self._latest_frame = None
@@ -149,11 +277,27 @@ class YOLODetector:
         detections.sort(key=lambda item: item["conf"], reverse=True)
         return detections
 
-    def _publish_target(self, detection):
+    def _update_prediction(self, detection, frame_shape):
+        if detection is None:
+            return None
+
+        cx, cy = detection["center"]
+        now = time.time()
+        self.kalman.update(cx, cy, now)
+        predicted = self.kalman.predict(self.prediction_time)
+        if predicted is None:
+            return None
+
+        frame_h, frame_w = frame_shape[:2]
+        px = min(max(predicted[0], 0.0), max(0.0, frame_w - 1.0))
+        py = min(max(predicted[1], 0.0), max(0.0, frame_h - 1.0))
+        return px, py
+
+    def _publish_target(self, detection, target_center):
         if not self.publish_target or self.target_pub is None or detection is None:
             return
 
-        cx, cy = detection["center"]
+        cx, cy = target_center if target_center is not None else detection["center"]
         msg = Point()
         msg.x = cx
         msg.y = cy
@@ -169,7 +313,7 @@ class YOLODetector:
             )
             self._last_target_log_time = now
 
-    def _annotate_frame(self, frame, detections):
+    def _annotate_frame(self, frame, detections, target_center):
         """Draw bounding boxes, labels, and selected target center."""
         for index, detection in enumerate(detections):
             x1, y1, x2, y2 = [int(value) for value in detection["xyxy"]]
@@ -200,13 +344,32 @@ class YOLODetector:
 
         if detections:
             cx, cy = detections[0]["center"]
+            tx, ty = target_center if target_center is not None else detections[0]["center"]
+            if target_center is not None:
+                cv2.circle(frame, (int(tx), int(ty)), 7, (255, 0, 255), 2)
+                cv2.line(
+                    frame,
+                    (int(cx), int(cy)),
+                    (int(tx), int(ty)),
+                    (255, 0, 255),
+                    2,
+                )
             cv2.putText(
                 frame,
-                f"laser target: ({cx:.1f}, {cy:.1f})",
+                f"detect: ({cx:.1f}, {cy:.1f})",
                 (10, 55),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.65,
                 (0, 255, 255),
+                2,
+            )
+            cv2.putText(
+                frame,
+                f"laser target: ({tx:.1f}, {ty:.1f})",
+                (10, 82),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.65,
+                (255, 0, 255),
                 2,
             )
 
@@ -232,10 +395,12 @@ class YOLODetector:
             # Run YOLO inference
             results = self.model(frame, conf=self.conf_threshold, verbose=False)
             detections = self._extract_detections(results)
-            self._publish_target(detections[0] if detections else None)
+            selected_detection = detections[0] if detections else None
+            target_center = self._update_prediction(selected_detection, frame.shape)
+            self._publish_target(selected_detection, target_center)
 
             # Annotate frame
-            annotated = self._annotate_frame(frame.copy(), detections)
+            annotated = self._annotate_frame(frame.copy(), detections, target_center)
 
             # Compute and display FPS
             self._fps_frame_count += 1
@@ -306,6 +471,24 @@ def main(args=None):
         default=None,
         help="Only use detections whose class name contains this text",
     )
+    parser.add_argument(
+        "--prediction-time",
+        type=float,
+        default=DEFAULT_PREDICTION_TIME,
+        help="Seconds to predict target motion ahead before publishing to laser; use 0 to disable",
+    )
+    parser.add_argument(
+        "--kalman-process-noise",
+        type=float,
+        default=800.0,
+        help="Higher values make velocity estimates adapt faster",
+    )
+    parser.add_argument(
+        "--kalman-measurement-noise",
+        type=float,
+        default=25.0,
+        help="Higher values smooth noisier detections more strongly",
+    )
     args, ros_args = parser.parse_known_args()
 
     rclpy.init(args=ros_args)
@@ -317,6 +500,9 @@ def main(args=None):
         not args.no_publish_target,
         args.class_id,
         args.class_name,
+        args.prediction_time,
+        args.kalman_process_noise,
+        args.kalman_measurement_noise,
     )
     try:
         detector.run()
