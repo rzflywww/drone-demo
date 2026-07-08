@@ -9,7 +9,7 @@ setup(
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
-        ("share/" + package_name + "/launch", ["launch/figure8.launch.py"]),
+        ("share/" + package_name + "/launch", ["launch/sim.launch.py"]),
         ("share/" + package_name + "/worlds", [
             "worlds/drone_world.sdf",
             "worlds/gui.config",
@@ -24,6 +24,7 @@ setup(
     entry_points={
         "console_scripts": [
             "figure8_controller = drone_figure8.figure8_controller:main",
+            "circle_controller = drone_figure8.circle_controller:main",
             "laser_controller = drone_figure8.laser_controller:main",
             "drone_record = drone_figure8.record:main",
             "drone_camera_recorder = drone_figure8.camera_recorder:main",

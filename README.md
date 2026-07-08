@@ -1,8 +1,10 @@
 # Drone Demo
 
 ROS 2 + Gazebo drone simulation demo. The project launches a simple quadcopter
-model in Gazebo and drives it along a figure-8 trajectory. It also includes
-helpers for camera snapshots/video recording and an optional YOLO detector.
+model in Gazebo. The drone stays still after simulation startup, and trajectory
+controllers can then be started manually to fly figure-8 or circular paths. It
+also includes helpers for camera snapshots/video recording and an optional YOLO
+detector.
 
 ## Tested Environment
 
@@ -53,36 +55,24 @@ source install/setup.bash
 ```
 
 ## Run The Simulation
-## Run The Simulation
 
-Start the Gazebo simulation. The figure-8 controller is **not** started
-automatically by default, so the drone will hover at its initial pose until
-you start the controller manually.
-
-```bash
-ros2 launch drone_figure8 figure8.launch.py
-```
-
-To keep the old auto-start behavior, pass `start_controller:=true`:
+Start Gazebo first. The launch file only starts the simulation, so the drone
+stays at its initial pose until you manually start a trajectory controller from
+another terminal.
 
 ```bash
-ros2 launch drone_figure8 figure8.launch.py start_controller:=true
+ros2 launch drone_figure8 sim.launch.py
 ```
 
-Launch arguments:
+Launch argument:
 
 ```bash
-ros2 launch drone_figure8 figure8.launch.py \
-  amplitude:=3.0 height:=2.0 period:=12.0 rate:=50.0
+ros2 launch drone_figure8 sim.launch.py world_file:=/path/to/drone_world.sdf
 ```
 
-- `start_controller`: if `true`, auto-start the figure-8 controller after 6s
-- `amplitude`: figure-8 path amplitude in meters
-- `height`: flight altitude in meters
-- `period`: seconds for one full figure-8 cycle
-- `rate`: controller update rate in Hz
+- `world_file`: path to the SDF world file
 
-### Start the figure-8 controller manually
+### Fly a figure-8
 
 After launching the simulation, open another terminal and run:
 
@@ -96,6 +86,40 @@ ros2 run drone_figure8 figure8_controller --ros-args \
   -p period:=12.0 \
   -p rate:=50.0
 ```
+
+Figure-8 parameters:
+
+- `amplitude`: figure-8 path amplitude in meters
+- `height`: flight altitude in meters
+- `period`: seconds for one full figure-8 cycle
+- `rate`: controller update rate in Hz
+
+### Fly a circle
+
+After launching the simulation, open another terminal and run:
+
+```bash
+cd /home/rzfly/drone_ws
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+ros2 run drone_figure8 circle_controller --ros-args \
+  -p radius:=3.0 \
+  -p height:=2.0 \
+  -p period:=12.0 \
+  -p center_x:=0.0 \
+  -p center_y:=0.0 \
+  -p clockwise:=false \
+  -p rate:=50.0
+```
+
+Circle parameters:
+
+- `radius`: circle radius in meters
+- `height`: flight altitude in meters
+- `period`: seconds for one full circle
+- `center_x`, `center_y`: circle center in world coordinates
+- `clockwise`: if `true`, fly clockwise; otherwise counter-clockwise
+- `rate`: controller update rate in Hz
 
 ## Record Camera Output
 
@@ -158,12 +182,13 @@ Then start YOLO detection and publish target centers:
 src/drone_figure8/
   drone_figure8/
     figure8_controller.py   # figure-8 trajectory controller
+    circle_controller.py    # circular trajectory controller
     laser_controller.py     # laser target controller
     record.py               # snapshot/video helper
     camera_recorder.py      # Gazebo camera frame converter
     yolo_detector.py        # optional YOLO detector
   launch/
-    figure8.launch.py
+    sim.launch.py
   worlds/
     drone_world.sdf
     gui.config
