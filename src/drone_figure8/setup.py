@@ -19,7 +19,7 @@ setup(
     zip_safe=True,
     maintainer="user",
     maintainer_email="user@example.com",
-    description="Drone figure-8 flight simulation",
+    description="Drone trajectory simulation in Gazebo",
     license="MIT",
     entry_points={
         "console_scripts": [

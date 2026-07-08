@@ -45,10 +45,17 @@ class Figure8Controller(Node):
         self.declare_parameter("period", 12.0)
         self.declare_parameter("rate", 50.0)
 
-        self.amplitude = self.get_parameter("amplitude").value
-        self.height = self.get_parameter("height").value
-        self.period = self.get_parameter("period").value
-        self.rate = self.get_parameter("rate").value
+        self.amplitude = float(self.get_parameter("amplitude").value)
+        self.height = float(self.get_parameter("height").value)
+        self.period = float(self.get_parameter("period").value)
+        self.rate = float(self.get_parameter("rate").value)
+
+        if self.amplitude <= 0.0:
+            raise ValueError("amplitude must be greater than 0")
+        if self.period <= 0.0:
+            raise ValueError("period must be greater than 0")
+        if self.rate <= 0.0:
+            raise ValueError("rate must be greater than 0")
 
         self.omega = 2.0 * math.pi / self.period
 

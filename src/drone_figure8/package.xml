@@ -3,7 +3,7 @@
 <package format="3">
   <name>drone_figure8</name>
   <version>0.1.0</version>
-  <description>Drone figure-8 lemniscate flight simulation in Gazebo Ionic</description>
+  <description>Drone trajectory simulation in Gazebo Harmonic</description>
   <maintainer email="user@example.com">user</maintainer>
   <license>MIT</license>
 
