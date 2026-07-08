@@ -10,6 +10,7 @@ from launch.actions import (
     TimerAction,
 )
 from launch.substitutions import LaunchConfiguration
+from launch.conditions import IfCondition
 from launch_ros.actions import Node
 from ros_gz_sim.actions import GzServer
 
@@ -36,6 +37,10 @@ def generate_launch_description():
         "rate", default_value="50.0",
         description="Controller update rate (Hz)"
     )
+    start_controller_arg = DeclareLaunchArgument(
+        "start_controller", default_value="false",
+        description="If true, auto-start figure-8 controller after 6s delay"
+    )
     world_file_arg = DeclareLaunchArgument(
         "world_file", default_value=world_file,
         description="Path to the SDF world file"
@@ -52,7 +57,7 @@ def generate_launch_description():
         output="screen",
     )
 
-    # Stage 3: 控制器（延迟 6 秒，等待 Gazebo 就绪）
+    # Stage 3: 控制器（延迟 6 秒，等待 Gazebo 就绪；默认不启动，可手动启动）
     controller = TimerAction(
         period=6.0,
         actions=[
@@ -69,6 +74,7 @@ def generate_launch_description():
                 }],
             )
         ],
+        condition=IfCondition(LaunchConfiguration("start_controller")),
     )
 
     return LaunchDescription([
@@ -77,6 +83,7 @@ def generate_launch_description():
         period_arg,
         rate_arg,
         world_file_arg,
+        start_controller_arg,
         gz_server,
         gz_gui,
         controller,

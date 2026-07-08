@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""激光指示器控制器 - 从地面摄像机指向图像中的像素位置。
+"""激光指示器控制器 - 从武器平台指向地面摄像机图像中的像素位置。
 
 独立节点，按需启动。输入地面摄像机画面中的像素坐标，例如 640x360
 画面的中心点 (320, 180)，节点会把该像素反投影成世界坐标系下的射线，
-然后用 SetEntityState 将 laser_beam 模型定位到摄像机处并指向该方向。
+再让武器平台炮口的 laser_beam 指向这条射线上的瞄准点。
 
 用法（在另一个终端中执行）:
     ros2 run drone_figure8 laser_controller --ros-args -p target_x:=320 -p target_y:=180
@@ -93,11 +93,17 @@ class LaserController(Node):
         self.declare_parameter("image_height", 360.0, numeric_parameter)
         self.declare_parameter("horizontal_fov", 1.047, numeric_parameter)
         self.declare_parameter("target_y_offset", 0.0, numeric_parameter)
+        self.declare_parameter("laser_aim_distance", 15.0, numeric_parameter)
 
         # 摄像机镜头世界坐标。默认值与 worlds/drone_world.sdf 中 ground_camera 对应。
         self.declare_parameter("camera_x", 7.8925, numeric_parameter)
         self.declare_parameter("camera_y", -7.8925, numeric_parameter)
         self.declare_parameter("camera_z", 1.5434, numeric_parameter)
+
+        # 武器平台炮口世界坐标。默认值与 worlds/drone_world.sdf 中 weapon_platform 对应。
+        self.declare_parameter("weapon_x", 7.9601, numeric_parameter)
+        self.declare_parameter("weapon_y", -7.4600, numeric_parameter)
+        self.declare_parameter("weapon_z", 1.5000, numeric_parameter)
 
         # 摄像机模型姿态。默认值与 worlds/drone_world.sdf 中 ground_camera 的 pose 对应。
         self.declare_parameter("camera_roll", 0.0, numeric_parameter)
@@ -110,10 +116,16 @@ class LaserController(Node):
         self.image_height = float(self.get_parameter("image_height").value)
         self.horizontal_fov = float(self.get_parameter("horizontal_fov").value)
         self.target_y_offset = float(self.get_parameter("target_y_offset").value)
+        self.laser_aim_distance = float(self.get_parameter("laser_aim_distance").value)
         self.camera_pos = (
             float(self.get_parameter("camera_x").value),
             float(self.get_parameter("camera_y").value),
             float(self.get_parameter("camera_z").value),
+        )
+        self.weapon_pos = (
+            float(self.get_parameter("weapon_x").value),
+            float(self.get_parameter("weapon_y").value),
+            float(self.get_parameter("weapon_z").value),
         )
         self.camera_rpy = (
             float(self.get_parameter("camera_roll").value),
@@ -141,6 +153,7 @@ class LaserController(Node):
         self.get_logger().info(
             f"Laser controller started: "
             f"camera=({self.camera_pos[0]}, {self.camera_pos[1]}, {self.camera_pos[2]}), "
+            f"weapon=({self.weapon_pos[0]}, {self.weapon_pos[1]}, {self.weapon_pos[2]}), "
             f"image={self.image_width:.0f}x{self.image_height:.0f}, "
             f"target=({self.target_x:.1f}, {self.target_y:.1f}), "
             f"rate={self.rate}Hz"
@@ -160,12 +173,20 @@ class LaserController(Node):
                 self.horizontal_fov = float(parameter.value)
             elif parameter.name == "target_y_offset":
                 self.target_y_offset = float(parameter.value)
+            elif parameter.name == "laser_aim_distance":
+                self.laser_aim_distance = float(parameter.value)
             elif parameter.name == "camera_x":
                 self.camera_pos = (float(parameter.value), self.camera_pos[1], self.camera_pos[2])
             elif parameter.name == "camera_y":
                 self.camera_pos = (self.camera_pos[0], float(parameter.value), self.camera_pos[2])
             elif parameter.name == "camera_z":
                 self.camera_pos = (self.camera_pos[0], self.camera_pos[1], float(parameter.value))
+            elif parameter.name == "weapon_x":
+                self.weapon_pos = (float(parameter.value), self.weapon_pos[1], self.weapon_pos[2])
+            elif parameter.name == "weapon_y":
+                self.weapon_pos = (self.weapon_pos[0], float(parameter.value), self.weapon_pos[2])
+            elif parameter.name == "weapon_z":
+                self.weapon_pos = (self.weapon_pos[0], self.weapon_pos[1], float(parameter.value))
             elif parameter.name == "camera_roll":
                 self.camera_rpy = (float(parameter.value), self.camera_rpy[1], self.camera_rpy[2])
             elif parameter.name == "camera_pitch":
@@ -232,8 +253,20 @@ class LaserController(Node):
             return
 
         cam = self.camera_pos
-        direction = self.pixel_to_world_direction(self.target_x, self.target_y)
-        laser_orient = direction_to_quaternion(*direction)
+        weapon = self.weapon_pos
+        camera_direction = self.pixel_to_world_direction(self.target_x, self.target_y)
+        aim_distance = max(0.1, self.laser_aim_distance)
+        aim_point = (
+            cam[0] + camera_direction[0] * aim_distance,
+            cam[1] + camera_direction[1] * aim_distance,
+            cam[2] + camera_direction[2] * aim_distance,
+        )
+        laser_direction = normalize((
+            aim_point[0] - weapon[0],
+            aim_point[1] - weapon[1],
+            aim_point[2] - weapon[2],
+        ))
+        laser_orient = direction_to_quaternion(*laser_direction)
 
         # 更新激光束位姿
         set_req = SetEntityState.Request()
@@ -241,7 +274,7 @@ class LaserController(Node):
 
         set_req.state = set_req.state or type(set_req.state)()
         set_req.state.pose = Pose(
-            position=Point(x=cam[0], y=cam[1], z=cam[2]),
+            position=Point(x=weapon[0], y=weapon[1], z=weapon[2]),
             orientation=laser_orient,
         )
         set_req.state.twist = set_req.state.twist or type(set_req.state.twist)()

@@ -53,21 +53,49 @@ source install/setup.bash
 ```
 
 ## Run The Simulation
+## Run The Simulation
+
+Start the Gazebo simulation. The figure-8 controller is **not** started
+automatically by default, so the drone will hover at its initial pose until
+you start the controller manually.
 
 ```bash
 ros2 launch drone_figure8 figure8.launch.py
 ```
 
+To keep the old auto-start behavior, pass `start_controller:=true`:
+
+```bash
+ros2 launch drone_figure8 figure8.launch.py start_controller:=true
+```
+
 Launch arguments:
 
 ```bash
-ros2 launch drone_figure8 figure8.launch.py amplitude:=3.0 height:=2.0 period:=12.0 rate:=50.0
+ros2 launch drone_figure8 figure8.launch.py \
+  amplitude:=3.0 height:=2.0 period:=12.0 rate:=50.0
 ```
 
+- `start_controller`: if `true`, auto-start the figure-8 controller after 6s
 - `amplitude`: figure-8 path amplitude in meters
 - `height`: flight altitude in meters
 - `period`: seconds for one full figure-8 cycle
 - `rate`: controller update rate in Hz
+
+### Start the figure-8 controller manually
+
+After launching the simulation, open another terminal and run:
+
+```bash
+cd /home/rzfly/drone_ws
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+ros2 run drone_figure8 figure8_controller --ros-args \
+  -p amplitude:=3.0 \
+  -p height:=2.0 \
+  -p period:=12.0 \
+  -p rate:=50.0
+```
 
 ## Record Camera Output
 
@@ -111,6 +139,10 @@ source /opt/ros/jazzy/setup.bash
 source install/setup.bash
 ros2 run drone_figure8 laser_controller
 ```
+
+By default, the laser is emitted from the weapon platform next to the ground
+camera. Override `weapon_x`, `weapon_y`, `weapon_z`, or `laser_aim_distance`
+with ROS parameters if you move the platform.
 
 Then start YOLO detection and publish target centers:
 

@@ -67,6 +67,9 @@
     <model name="quadcopter">
       <pose>0 0 2.0 0 0 0</pose>
       <link name="base_link">
+        <!-- 轨迹由 SetEntityState 控制；关闭重力避免控制器启动前无人机下落。 -->
+        <gravity>false</gravity>
+
         <!-- 中心机身 -->
         <visual name="body">
           <cast_shadows>false</cast_shadows>
@@ -271,9 +274,9 @@
       </link>
     </model>
 
-    <!-- ===== 地面摄像机 ===== -->
-    <!-- 放置在地面上，斜向上拍摄无人机 8 字飞行区域 -->
-    <model name="ground_camera">
+   <!-- ===== 地面摄像机 ===== -->
+   <!-- 放置在地面上，斜向上拍摄无人机 8 字飞行区域 -->
+   <model name="ground_camera">
       <static>true</static>
       <pose>8.0 -8.0 1.5 0 0.044 2.356</pose>
       <!-- 位置: (8,-8,1.5) 地面高度1.5m -->
@@ -353,14 +356,16 @@
         </visual>
 
         <!-- 摄像机传感器 -->
-        <sensor name="camera_sensor" type="camera">
-          <pose>0.15 0 0.05 0 0 0</pose>
-          <always_on>true</always_on>
-          <update_rate>30</update_rate>
-          <visualize>true</visualize>
-          <topic>ground_camera</topic>
-          <camera>
-            <horizontal_fov>1.047</horizontal_fov>
+       <sensor name="camera_sensor" type="camera">
+         <pose>0.15 0 0.05 0 0 0</pose>
+         <always_on>true</always_on>
+         <update_rate>30</update_rate>
+         <visualize>true</visualize>
+         <topic>ground_camera</topic>
+         <camera>
+            <!-- 不渲染激光束（bit 0x02），避免 YOLO 把无人机+激光线误识别为风筝 -->
+            <visibility_mask>0xFFFFFFFD</visibility_mask>
+           <horizontal_fov>1.047</horizontal_fov>
             <image>
               <width>640</width>
               <height>360</height>
@@ -383,29 +388,109 @@
       </link>
     </model>
 
-    <!-- ===== 激光束 ===== -->
-    <!-- 从地面摄像机指向无人机的可视激光束，由 figure8_controller 控制 -->
-    <model name="laser_beam">
-      <static>false</static>
-      <pose>0 0 -100 0 0 0</pose>
+    <!-- ===== 武器平台 ===== -->
+    <!-- 放在地面摄像机右侧，炮口位置对应 laser_controller.py 的 weapon_* 默认参数 -->
+    <model name="weapon_platform">
+      <static>true</static>
+      <pose>8.25 -7.75 0 0 0 2.356</pose>
 
-      <link name="beam_link">
-        <visual name="beam">
-          <cast_shadows>false</cast_shadows>
-          <pose>0 0 7.7 0 0 0</pose>
+      <link name="weapon_link">
+        <visual name="base">
+          <pose>0 0 0.05 0 0 0</pose>
           <geometry>
             <cylinder>
-              <radius>0.001</radius>
-              <length>15.0</length>
+              <radius>0.18</radius>
+              <length>0.10</length>
             </cylinder>
           </geometry>
           <material>
-            <ambient>0 1 0 1</ambient>
-            <diffuse>0 1 0 1</diffuse>
-            <specular>0.5 0.5 0.5 1</specular>
-            <emissive>0 1 0 1</emissive>
+            <ambient>0.12 0.12 0.12 1</ambient>
+            <diffuse>0.18 0.18 0.18 1</diffuse>
           </material>
         </visual>
+
+        <visual name="pedestal">
+          <pose>0 0 0.75 0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.055</radius>
+              <length>1.35</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.18 0.18 0.18 1</ambient>
+            <diffuse>0.25 0.25 0.25 1</diffuse>
+          </material>
+        </visual>
+
+        <visual name="turret_body">
+          <pose>0 0 1.43 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.26 0.20 0.16</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.10 0.12 0.14 1</ambient>
+            <diffuse>0.16 0.20 0.23 1</diffuse>
+          </material>
+        </visual>
+
+        <visual name="barrel">
+          <pose>0.22 0 1.50 0 1.5708 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.025</radius>
+              <length>0.38</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.04 0.04 0.04 1</ambient>
+            <diffuse>0.08 0.08 0.08 1</diffuse>
+          </material>
+        </visual>
+
+       <visual name="muzzle">
+         <pose>0.41 0 1.50 0 1.5708 0</pose>
+         <geometry>
+           <cylinder>
+             <radius>0.035</radius>
+             <length>0.045</length>
+           </cylinder>
+         </geometry>
+         <material>
+            <ambient>0.5 0.0 0.0 1</ambient>
+            <diffuse>0.8 0.0 0.0 1</diffuse>
+            <emissive>0.35 0.0 0.0 1</emissive>
+         </material>
+       </visual>
+      </link>
+    </model>
+
+   <!-- ===== 激光束 ===== -->
+   <!-- 从武器平台炮口发射的可视激光束，由 laser_controller 控制 -->
+   <model name="laser_beam">
+     <static>false</static>
+     <pose>0 0 -100 0 0 0</pose>
+
+     <link name="beam_link">
+       <visual name="beam">
+         <cast_shadows>false</cast_shadows>
+          <visibility_flags>0x02</visibility_flags>
+         <pose>0 0 7.5 0 0 0</pose>
+         <geometry>
+           <cylinder>
+             <radius>0.001</radius>
+             <length>15.0</length>
+           </cylinder>
+         </geometry>
+         <material>
+            <ambient>1 0 0 1</ambient>
+            <diffuse>1 0 0 1</diffuse>
+            <specular>0.5 0.5 0.5 1</specular>
+            <emissive>1 0 0 1</emissive>
+         </material>
+       </visual>
       </link>
     </model>
 
