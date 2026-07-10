@@ -4,6 +4,7 @@
 独立节点，按需启动。输入地面摄像机画面中的像素坐标，例如 640x360
 画面的中心点 (320, 180)，节点会把该像素反投影成世界坐标系下的射线，
 优先使用深度图把该像素还原成世界坐标，再让武器平台炮口的 laser_beam 指向该点。
+可选的世界坐标卡尔曼滤波会在三维还原之后执行，避免用未来像素采样当前深度图。
 
 用法（在另一个终端中执行）:
     ros2 run drone_demo laser_controller --ros-args -p target_x:=320 -p target_y:=180
@@ -24,6 +25,12 @@ from gz.transport13 import Node as GzNode
 from simulation_interfaces.srv import SetEntityState
 
 from drone_demo.scene_config import scene_defaults_from_sdf
+from drone_demo.target_filters import (
+    DEFAULT_WORLD_MEASUREMENT_NOISE,
+    DEFAULT_WORLD_PROCESS_NOISE,
+    TARGET_FILTER_NAMES,
+    create_world_target_filter,
+)
 
 PIXEL_FORMAT_R_FLOAT32 = 13
 
@@ -110,6 +117,23 @@ class LaserController(Node):
         self.declare_parameter("depth_is_range", False, numeric_parameter)
         self.declare_parameter("log_estimated_world", True, numeric_parameter)
         self.declare_parameter("estimated_world_log_rate", 2.0, numeric_parameter)
+        self.declare_parameter("world_target_filter", "none")
+        self.declare_parameter("world_prediction_time", 0.15, numeric_parameter)
+        self.declare_parameter(
+            "world_kalman_process_noise",
+            DEFAULT_WORLD_PROCESS_NOISE,
+            numeric_parameter,
+        )
+        self.declare_parameter(
+            "world_kalman_measurement_noise",
+            DEFAULT_WORLD_MEASUREMENT_NOISE,
+            numeric_parameter,
+        )
+        self.declare_parameter(
+            "world_filter_max_measurement_age",
+            0.5,
+            numeric_parameter,
+        )
 
         # 摄像机镜头世界坐标。默认值从 worlds/drone_world.sdf 读取。
         self.declare_parameter("camera_x", scene_defaults["camera_x"], numeric_parameter)
@@ -142,6 +166,27 @@ class LaserController(Node):
         self.estimated_world_log_rate = float(
             self.get_parameter("estimated_world_log_rate").value
         )
+        self.world_target_filter_name = str(
+            self.get_parameter("world_target_filter").value
+        )
+        self.world_prediction_time = max(
+            0.0, float(self.get_parameter("world_prediction_time").value)
+        )
+        self.world_kalman_process_noise = float(
+            self.get_parameter("world_kalman_process_noise").value
+        )
+        self.world_kalman_measurement_noise = float(
+            self.get_parameter("world_kalman_measurement_noise").value
+        )
+        self.world_filter_max_measurement_age = max(
+            0.0,
+            float(self.get_parameter("world_filter_max_measurement_age").value),
+        )
+        self.world_target_filter = create_world_target_filter(
+            self.world_target_filter_name,
+            kalman_process_noise=self.world_kalman_process_noise,
+            kalman_measurement_noise=self.world_kalman_measurement_noise,
+        )
         self.camera_pos = (
             float(self.get_parameter("camera_x").value),
             float(self.get_parameter("camera_y").value),
@@ -168,6 +213,8 @@ class LaserController(Node):
         self._last_aim_source = "unknown"
         self._last_aim_depth = None
         self._last_aim_ray_distance = None
+        self._target_measurement_pending = False
+        self._world_filter_last_update_time = None
 
         self.add_on_set_parameters_callback(self._on_parameters_set)
         self.create_subscription(Point, "laser_target_pixel", self._on_target_pixel, 10)
@@ -203,6 +250,8 @@ class LaserController(Node):
             f"image={self.image_width:.0f}x{self.image_height:.0f}, "
             f"target=({self.target_x:.1f}, {self.target_y:.1f}), "
             f"depth={'enabled' if self.use_depth_camera else 'disabled'}, "
+            f"world_filter={self.world_target_filter_name}, "
+            f"world_prediction_time={self.world_prediction_time:.3f}s, "
             f"estimated_world_log_rate={self.estimated_world_log_rate}Hz, "
             f"rate={self.rate}Hz"
         )
@@ -237,6 +286,42 @@ class LaserController(Node):
                 self.log_estimated_world = bool(parameter.value)
             elif parameter.name == "estimated_world_log_rate":
                 self.estimated_world_log_rate = float(parameter.value)
+            elif parameter.name == "world_target_filter":
+                filter_name = str(parameter.value)
+                if filter_name not in TARGET_FILTER_NAMES:
+                    return SetParametersResult(
+                        successful=False,
+                        reason=(
+                            f"world_target_filter must be one of "
+                            f"{', '.join(TARGET_FILTER_NAMES)}"
+                        ),
+                    )
+                self.world_target_filter_name = filter_name
+                self.world_target_filter = create_world_target_filter(
+                    filter_name,
+                    kalman_process_noise=self.world_kalman_process_noise,
+                    kalman_measurement_noise=self.world_kalman_measurement_noise,
+                )
+                self._world_filter_last_update_time = None
+                self._target_measurement_pending = True
+            elif parameter.name == "world_prediction_time":
+                self.world_prediction_time = max(0.0, float(parameter.value))
+            elif parameter.name == "world_kalman_process_noise":
+                self.world_kalman_process_noise = float(parameter.value)
+                if self.world_target_filter is not None:
+                    self.world_target_filter.process_noise = (
+                        self.world_kalman_process_noise
+                    )
+            elif parameter.name == "world_kalman_measurement_noise":
+                self.world_kalman_measurement_noise = float(parameter.value)
+                if self.world_target_filter is not None:
+                    self.world_target_filter.measurement_noise = (
+                        self.world_kalman_measurement_noise
+                    )
+            elif parameter.name == "world_filter_max_measurement_age":
+                self.world_filter_max_measurement_age = max(
+                    0.0, float(parameter.value)
+                )
             elif parameter.name == "camera_x":
                 self.camera_pos = (float(parameter.value), self.camera_pos[1], self.camera_pos[2])
             elif parameter.name == "camera_y":
@@ -261,6 +346,7 @@ class LaserController(Node):
     def _on_target_pixel(self, msg):
         self.target_x = float(msg.x)
         self.target_y = float(msg.y)
+        self._target_measurement_pending = True
 
     def _on_depth_image(self, msg):
         """Store the latest Gazebo depth image in meters."""
@@ -364,7 +450,7 @@ class LaserController(Node):
 
         return float(np.median(valid))
 
-    def target_world_position(self):
+    def _measured_target_world_position(self):
         cam = self.camera_pos
         camera_direction = self.pixel_to_world_direction(self.target_x, self.target_y)
         depth = self.depth_at_pixel(self.target_x, self.target_y)
@@ -394,6 +480,48 @@ class LaserController(Node):
             cam[1] + camera_direction[1] * ray_distance,
             cam[2] + camera_direction[2] * ray_distance,
         )
+
+    def target_world_position(self):
+        """Return the raw or filtered world-space point used to aim the laser."""
+        if self.world_target_filter is None:
+            return self._measured_target_world_position()
+
+        measurement = None
+        measurement_source = None
+        updated = False
+        if self._target_measurement_pending or not self.world_target_filter.initialized:
+            measurement = self._measured_target_world_position()
+            measurement_source = self._last_aim_source
+
+            # A fallback point has an arbitrary fixed range and must not be used
+            # as a 3D Kalman measurement.
+            if self._target_measurement_pending and measurement_source == "depth":
+                now = time.monotonic()
+                self.world_target_filter.update(*measurement, now)
+                self._world_filter_last_update_time = now
+                self._target_measurement_pending = False
+                updated = True
+
+        if not self.world_target_filter.initialized:
+            return measurement
+
+        now = time.monotonic()
+        measurement_age = max(0.0, now - self._world_filter_last_update_time)
+        measurement_age = min(
+            measurement_age,
+            self.world_filter_max_measurement_age,
+        )
+        predicted = self.world_target_filter.predict(
+            measurement_age + self.world_prediction_time
+        )
+        if predicted is None:
+            return measurement
+
+        if self._target_measurement_pending and not updated:
+            self._last_aim_source = "world_kalman_hold"
+        else:
+            self._last_aim_source = "world_kalman"
+        return predicted
 
     def log_estimated_world_position(self, aim_point):
         if not self.log_estimated_world:

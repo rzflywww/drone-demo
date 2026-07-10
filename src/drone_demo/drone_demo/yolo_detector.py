@@ -28,27 +28,12 @@ from geometry_msgs.msg import Point
 from gz.msgs10 import image_pb2
 from gz.transport13 import Node as GzNode
 
-try:
-    from .target_filters import (
-        TARGET_FILTER_NAMES,
-        PixelKalmanFilter,
-        create_target_filter,
-    )
-except ImportError:
-    # Keep direct execution (python3 yolo_detector.py) working.
-    from target_filters import (
-        TARGET_FILTER_NAMES,
-        PixelKalmanFilter,
-        create_target_filter,
-    )
-
 # --- Constants ---
 PIXEL_FORMAT_RGB_INT8 = 3
 DEFAULT_MODEL = "/home/rzfly/ultralytics-8.3.39/ultralytics/yolo11n.pt"
 DEFAULT_TOPIC = "/ground_camera"
 DEFAULT_CONF = 0.25
 DEFAULT_TARGET_TOPIC = "/laser_target_pixel"
-DEFAULT_PREDICTION_TIME = 0.15
 YOLO_VENV_SITE_PACKAGES = Path(
     "/home/rzfly/drone_ws/yolo_venv/lib/python3.12/site-packages"
 )
@@ -100,10 +85,6 @@ class YOLODetector:
         publish_target,
         class_id,
         class_name,
-        prediction_time,
-        kalman_process_noise,
-        kalman_measurement_noise,
-        target_filter_name="none",
     ):
         self.topic = topic
         self.conf_threshold = conf_threshold
@@ -111,13 +92,6 @@ class YOLODetector:
         self.publish_target = publish_target
         self.class_id = class_id
         self.class_name = class_name.lower() if class_name else None
-        self.target_filter_name = target_filter_name
-        self.prediction_time = max(0.0, float(prediction_time))
-        self.target_filter = create_target_filter(
-            target_filter_name,
-            kalman_process_noise=kalman_process_noise,
-            kalman_measurement_noise=kalman_measurement_noise,
-        )
         self.frame_count = 0
         self.fps = 0.0
         self._last_fps_time = time.time()
@@ -145,13 +119,7 @@ class YOLODetector:
             callback=self._image_callback,
         )
         print(f"Subscribed to {self.topic}, waiting for frames...")
-        if self.target_filter is not None:
-            print(
-                f"Target filter enabled: {self.target_filter_name} "
-                f"(lead_time={self.prediction_time:.3f}s)"
-            )
-        else:
-            print("Target filter disabled; publishing raw detection centers")
+        print("Publishing raw detection centers for world-space tracking")
 
         # Latest frame storage (thread-safe via GIL for CPython)
         self._latest_frame = None
@@ -220,27 +188,11 @@ class YOLODetector:
         detections.sort(key=lambda item: item["conf"], reverse=True)
         return detections
 
-    def _filter_target_center(self, detection, frame_shape):
-        if detection is None or self.target_filter is None:
-            return None
-
-        cx, cy = detection["center"]
-        now = time.time()
-        self.target_filter.update(cx, cy, now)
-        predicted = self.target_filter.predict(self.prediction_time)
-        if predicted is None:
-            return None
-
-        frame_h, frame_w = frame_shape[:2]
-        px = min(max(predicted[0], 0.0), max(0.0, frame_w - 1.0))
-        py = min(max(predicted[1], 0.0), max(0.0, frame_h - 1.0))
-        return px, py
-
-    def _publish_target(self, detection, target_center):
+    def _publish_target(self, detection):
         if not self.publish_target or self.target_pub is None or detection is None:
             return
 
-        cx, cy = target_center if target_center is not None else detection["center"]
+        cx, cy = detection["center"]
         msg = Point()
         msg.x = cx
         msg.y = cy
@@ -256,7 +208,7 @@ class YOLODetector:
             )
             self._last_target_log_time = now
 
-    def _annotate_frame(self, frame, detections, target_center):
+    def _annotate_frame(self, frame, detections):
         """Draw bounding boxes, labels, and selected target center."""
         for index, detection in enumerate(detections):
             x1, y1, x2, y2 = [int(value) for value in detection["xyxy"]]
@@ -287,32 +239,13 @@ class YOLODetector:
 
         if detections:
             cx, cy = detections[0]["center"]
-            tx, ty = target_center if target_center is not None else detections[0]["center"]
-            if target_center is not None:
-                cv2.circle(frame, (int(tx), int(ty)), 7, (255, 0, 255), 2)
-                cv2.line(
-                    frame,
-                    (int(cx), int(cy)),
-                    (int(tx), int(ty)),
-                    (255, 0, 255),
-                    2,
-                )
             cv2.putText(
                 frame,
-                f"detect: ({cx:.1f}, {cy:.1f})",
+                f"target pixel: ({cx:.1f}, {cy:.1f})",
                 (10, 55),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.65,
                 (0, 255, 255),
-                2,
-            )
-            cv2.putText(
-                frame,
-                f"laser target: ({tx:.1f}, {ty:.1f})",
-                (10, 82),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.65,
-                (255, 0, 255),
                 2,
             )
 
@@ -339,11 +272,10 @@ class YOLODetector:
             results = self.model(frame, conf=self.conf_threshold, verbose=False)
             detections = self._extract_detections(results)
             selected_detection = detections[0] if detections else None
-            target_center = self._filter_target_center(selected_detection, frame.shape)
-            self._publish_target(selected_detection, target_center)
+            self._publish_target(selected_detection)
 
             # Annotate frame
-            annotated = self._annotate_frame(frame.copy(), detections, target_center)
+            annotated = self._annotate_frame(frame.copy(), detections)
 
             # Compute and display FPS
             self._fps_frame_count += 1
@@ -414,30 +346,6 @@ def main(args=None):
         default=None,
         help="Only use detections whose class name contains this text",
     )
-    parser.add_argument(
-        "--target-filter",
-        choices=TARGET_FILTER_NAMES,
-        default="none",
-        help="Optional target-center filter; default 'none' bypasses filtering",
-    )
-    parser.add_argument(
-        "--prediction-time",
-        type=float,
-        default=DEFAULT_PREDICTION_TIME,
-        help="Seconds the selected target filter predicts ahead; 0 disables extrapolation",
-    )
-    parser.add_argument(
-        "--kalman-process-noise",
-        type=float,
-        default=800.0,
-        help="Higher values make acceleration estimates adapt faster",
-    )
-    parser.add_argument(
-        "--kalman-measurement-noise",
-        type=float,
-        default=25.0,
-        help="Higher values smooth noisier detections more strongly",
-    )
     args, ros_args = parser.parse_known_args()
 
     rclpy.init(args=ros_args)
@@ -449,10 +357,6 @@ def main(args=None):
         not args.no_publish_target,
         args.class_id,
         args.class_name,
-        args.prediction_time,
-        args.kalman_process_noise,
-        args.kalman_measurement_noise,
-        args.target_filter,
     )
     try:
         detector.run()

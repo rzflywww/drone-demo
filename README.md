@@ -148,11 +148,12 @@ ros2 run drone_demo drone_record video -o drone_flight.mp4 -d 5
 Start the simulation first, then run:
 
 ```bash
-ros2 run drone_demo yolo_detector --model /path/to/yolo11n.pt
+ros2 run drone_demo yolo_detector
 ```
 
-The default model path in the code points to the original development machine,
-so passing `--model` is recommended on a new computer.
+This workspace uses
+`/home/rzfly/ultralytics-8.3.39/ultralytics/yolo11n.pt` by default. Override it
+with `--model /path/to/yolo11n.pt` after moving the project to another machine.
 
 To aim the laser at detected target centers, start the laser controller in a
 separate terminal:
@@ -182,47 +183,54 @@ Then start YOLO detection and publish target centers:
   --model /path/to/yolo11n.pt
 ```
 
-### Optional Target Filtering
+### Recommended World-Space Prediction
 
-Target filtering is pluggable and disabled by default. With
-`--target-filter none`, the detector does not create or execute a filter and
-publishes the raw YOLO center directly.
+For laser aiming with depth, keep the YOLO output unfiltered and enable the
+Kalman filter in the laser controller. The controller reconstructs the current
+3D target position from the detection pixel and depth first, then filters and
+predicts that position in world coordinates:
 
-Enable the constant-acceleration Kalman filter explicitly when smoothing or
-prediction is needed:
-
-```bash
-/home/rzfly/drone_ws/yolo_venv/bin/python3 \
-  /home/rzfly/drone_ws/src/drone_demo/drone_demo/yolo_detector.py \
-  --model /path/to/yolo11n.pt \
-  --target-filter kalman --prediction-time 0.15
+```text
+current YOLO pixel + current depth -> 3D world measurement -> Kalman prediction -> laser aim
 ```
 
-The relevant options are:
+Start the laser controller with world-space filtering enabled:
 
-| Option | Default | Description |
+```bash
+ros2 run drone_demo laser_controller --ros-args \
+  -p world_target_filter:=kalman \
+  -p world_prediction_time:=0.15
+```
+
+YOLO always publishes the current raw detection center, so no filtering or
+prediction arguments are needed:
+
+```bash
+ros2 run drone_demo yolo_detector
+```
+
+The world-space filter options are ROS parameters on `laser_controller`:
+
+| Parameter | Default | Description |
 | --- | --- | --- |
-| `--target-filter` | `none` | Select `none` for direct publishing or `kalman` for filtering. |
-| `--prediction-time` | `0.15` | Predict this many seconds ahead. With `kalman` and `0`, position smoothing remains enabled but extrapolation is disabled. |
-| `--kalman-process-noise` | `800.0` | Higher values make velocity and acceleration estimates react faster. |
-| `--kalman-measurement-noise` | `25.0` | Higher values smooth noisy YOLO center measurements more strongly. |
+| `world_target_filter` | `none` | Select `none` for direct aiming or `kalman` for 3D filtering. |
+| `world_prediction_time` | `0.15` | Seconds to predict the world position ahead; `0` keeps smoothing without extrapolation. |
+| `world_kalman_process_noise` | `10.0` | Process noise for the meter-based position, velocity, and acceleration model. |
+| `world_kalman_measurement_noise` | `0.04` | World-position measurement variance in square meters. |
+| `world_filter_max_measurement_age` | `0.5` | Maximum measurement age included in the prediction horizon. |
 
-For smoothing without forward prediction, use:
+Each new YOLO pixel updates the world filter at most once. Invalid depth and
+the fixed-distance fallback are not inserted as Kalman measurements; the
+controller temporarily holds the existing world prediction instead.
 
-```bash
-ros2 run drone_demo yolo_detector \
-  --model /path/to/yolo11n.pt \
-  --target-filter kalman --prediction-time 0
-```
+The former image-space Kalman prediction has been removed to prevent future
+pixels from being combined with the current depth frame. Filtering and
+prediction now happen only after the target has been reconstructed in 3D.
 
-Longer prediction times can amplify detection noise and can sample depth at a
-future pixel using the current depth frame. If the laser becomes unstable,
-reduce `--prediction-time` or set it to `0`.
-
-Filter implementations and their factory are kept in `target_filters.py`.
-Additional filters should provide the same `update(x, y, timestamp)` and
-`predict(lead_time)` interface, then be registered in `TARGET_FILTER_NAMES`
-and `create_target_filter()`.
+World-space filter implementations and their factory are kept in
+`target_filters.py`. Additional filters should provide `update(...)` and
+`predict(lead_time)`, then be registered in `TARGET_FILTER_NAMES` and
+`create_world_target_filter()`.
 
 ## Package Layout
 
@@ -234,8 +242,8 @@ src/drone_demo/
     laser_controller.py     # laser target controller
     record.py               # snapshot/video helper
     camera_recorder.py      # Gazebo camera frame converter
-    target_filters.py       # optional target-filter implementations
-    yolo_detector.py        # optional YOLO detector
+    target_filters.py       # optional 3D world-target filters
+    yolo_detector.py        # YOLO detector publishing raw target pixels
   launch/
     sim.launch.py
   worlds/
