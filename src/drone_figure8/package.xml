@@ -7,11 +7,20 @@
   <maintainer email="user@example.com">user</maintainer>
   <license>MIT</license>
 
+  <buildtool_depend>ament_python</buildtool_depend>
+
   <depend>rclpy</depend>
   <depend>rcl_interfaces</depend>
   <depend>geometry_msgs</depend>
   <depend>simulation_interfaces</depend>
+  <depend>ament_index_python</depend>
 
+  <exec_depend>ffmpeg</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>python3-gz-msgs10</exec_depend>
+  <exec_depend>python3-gz-transport13</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
   <exec_depend>ros_gz_sim</exec_depend>
   <exec_depend>ros2launch</exec_depend>
 

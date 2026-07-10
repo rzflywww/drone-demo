@@ -21,6 +21,7 @@ setup(
     maintainer_email="user@example.com",
     description="Drone trajectory simulation in Gazebo",
     license="MIT",
+    test_suite="tests",
     entry_points={
         "console_scripts": [
             "figure8_controller = drone_figure8.figure8_controller:main",

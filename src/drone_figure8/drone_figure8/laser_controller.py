@@ -23,6 +23,7 @@ from gz.msgs10 import image_pb2
 from gz.transport13 import Node as GzNode
 from simulation_interfaces.srv import SetEntityState
 
+from drone_figure8.scene_config import scene_defaults_from_sdf
 
 PIXEL_FORMAT_R_FLOAT32 = 13
 
@@ -90,6 +91,7 @@ class LaserController(Node):
         super().__init__("laser_controller")
 
         numeric_parameter = ParameterDescriptor(dynamic_typing=True)
+        scene_defaults = scene_defaults_from_sdf()
 
         self.declare_parameter("rate", 50.0, numeric_parameter)
         self.rate = self.get_parameter("rate").value
@@ -109,20 +111,20 @@ class LaserController(Node):
         self.declare_parameter("log_estimated_world", True, numeric_parameter)
         self.declare_parameter("estimated_world_log_rate", 2.0, numeric_parameter)
 
-        # 摄像机镜头世界坐标。默认值与 worlds/drone_world.sdf 中 ground_camera 对应。
-        self.declare_parameter("camera_x", 7.8925, numeric_parameter)
-        self.declare_parameter("camera_y", -7.8925, numeric_parameter)
-        self.declare_parameter("camera_z", 1.5434, numeric_parameter)
+        # 摄像机镜头世界坐标。默认值从 worlds/drone_world.sdf 读取。
+        self.declare_parameter("camera_x", scene_defaults["camera_x"], numeric_parameter)
+        self.declare_parameter("camera_y", scene_defaults["camera_y"], numeric_parameter)
+        self.declare_parameter("camera_z", scene_defaults["camera_z"], numeric_parameter)
 
-        # 武器平台炮口世界坐标。默认值与 worlds/drone_world.sdf 中 weapon_platform 对应。
-        self.declare_parameter("weapon_x", 7.9601, numeric_parameter)
-        self.declare_parameter("weapon_y", -7.4600, numeric_parameter)
-        self.declare_parameter("weapon_z", 1.5000, numeric_parameter)
+        # 武器平台炮口世界坐标。默认值从 worlds/drone_world.sdf 读取。
+        self.declare_parameter("weapon_x", scene_defaults["weapon_x"], numeric_parameter)
+        self.declare_parameter("weapon_y", scene_defaults["weapon_y"], numeric_parameter)
+        self.declare_parameter("weapon_z", scene_defaults["weapon_z"], numeric_parameter)
 
-        # 摄像机模型姿态。默认值与 worlds/drone_world.sdf 中 ground_camera 的 pose 对应。
-        self.declare_parameter("camera_roll", 0.0, numeric_parameter)
-        self.declare_parameter("camera_pitch", 0.044, numeric_parameter)
-        self.declare_parameter("camera_yaw", 2.356, numeric_parameter)
+        # 摄像机模型姿态。默认值从 worlds/drone_world.sdf 读取。
+        self.declare_parameter("camera_roll", scene_defaults["camera_roll"], numeric_parameter)
+        self.declare_parameter("camera_pitch", scene_defaults["camera_pitch"], numeric_parameter)
+        self.declare_parameter("camera_yaw", scene_defaults["camera_yaw"], numeric_parameter)
 
         self.target_x = float(self.get_parameter("target_x").value)
         self.target_y = float(self.get_parameter("target_y").value)
@@ -170,15 +172,16 @@ class LaserController(Node):
         self.add_on_set_parameters_callback(self._on_parameters_set)
         self.create_subscription(Point, "laser_target_pixel", self._on_target_pixel, 10)
 
-        self.gz_node = None
-        if self.use_depth_camera:
-            self.gz_node = GzNode()
-            self.gz_node.subscribe(
-                msg_type=image_pb2.Image,
-                topic=self.depth_topic,
-                callback=self._on_depth_image,
-            )
-            self.get_logger().info(f"Subscribed to Gazebo depth topic: {self.depth_topic}")
+        self.gz_node = GzNode()
+        self.gz_node.subscribe(
+            msg_type=image_pb2.Image,
+            topic=self.depth_topic,
+            callback=self._on_depth_image,
+        )
+        self.get_logger().info(
+            f"Subscribed to Gazebo depth topic: {self.depth_topic}; "
+            f"use_depth_camera={self.use_depth_camera}"
+        )
 
         # 创建 SetEntityState 客户端（更新激光束位姿）
         set_service = "/gzserver/set_entity_state"
