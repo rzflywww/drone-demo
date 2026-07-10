@@ -13,7 +13,7 @@ from ros_gz_sim.actions import GzServer
 
 
 def generate_launch_description():
-    pkg_dir = get_package_share_directory("drone_figure8")
+    pkg_dir = get_package_share_directory("drone_demo")
     world_file = os.path.join(pkg_dir, "worlds", "drone_world.sdf")
     gui_config = os.path.join(pkg_dir, "worlds", "gui.config")
 

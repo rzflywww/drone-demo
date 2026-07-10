@@ -1,7 +1,7 @@
 import os
 import unittest
 
-from drone_figure8.scene_config import scene_defaults_from_sdf
+from drone_demo.scene_config import scene_defaults_from_sdf
 
 
 class SceneDefaultsTest(unittest.TestCase):

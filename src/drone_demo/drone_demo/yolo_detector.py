@@ -7,13 +7,13 @@ runs YOLO11n inference, and displays annotated video with cv2.imshow.
 
 Usage:
     # With Gazebo running (after source venv + ROS 2 setup):
-    ros2 run drone_figure8 yolo_detector
+    ros2 run drone_demo yolo_detector
 
     # Or directly:
     python3 yolo_detector.py [--model PATH] [--conf 0.25] [--topic /ground_camera]
 
     # Publish detected target center to the laser controller:
-    ros2 run drone_figure8 yolo_detector --ros-args
+    ros2 run drone_demo yolo_detector --ros-args
 """
 
 import argparse

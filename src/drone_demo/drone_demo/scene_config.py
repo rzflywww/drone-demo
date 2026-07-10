@@ -64,7 +64,7 @@ def find_default_world_file():
     try:
         from ament_index_python.packages import get_package_share_directory
 
-        share_dir = get_package_share_directory("drone_figure8")
+        share_dir = get_package_share_directory("drone_demo")
         world_file = os.path.join(share_dir, "worlds", "drone_world.sdf")
         if os.path.exists(world_file):
             return world_file

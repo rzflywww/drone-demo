@@ -6,7 +6,7 @@
 优先使用深度图把该像素还原成世界坐标，再让武器平台炮口的 laser_beam 指向该点。
 
 用法（在另一个终端中执行）:
-    ros2 run drone_figure8 laser_controller --ros-args -p target_x:=320 -p target_y:=180
+    ros2 run drone_demo laser_controller --ros-args -p target_x:=320 -p target_y:=180
     ros2 topic pub --once /laser_target_pixel geometry_msgs/msg/Point "{x: 320.0, y: 180.0, z: 0.0}"
     # Ctrl+C 停止后激光束会被隐藏
 """
@@ -23,7 +23,7 @@ from gz.msgs10 import image_pb2
 from gz.transport13 import Node as GzNode
 from simulation_interfaces.srv import SetEntityState
 
-from drone_figure8.scene_config import scene_defaults_from_sdf
+from drone_demo.scene_config import scene_defaults_from_sdf
 
 PIXEL_FORMAT_R_FLOAT32 = 13
 

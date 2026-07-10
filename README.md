@@ -1,10 +1,10 @@
-# Drone Demo
+# Drone Trajectory And Tracking Demo
 
 ROS 2 + Gazebo drone simulation demo. The project launches a simple quadcopter
 model in Gazebo. The drone stays still after simulation startup, and trajectory
 controllers can then be started manually to fly figure-8 or circular paths. It
-also includes helpers for camera snapshots/video recording and an optional YOLO
-detector.
+also includes helpers for pose monitoring, camera snapshots/video recording,
+YOLO detection, and laser target visualization.
 
 ## Tested Environment
 
@@ -61,13 +61,13 @@ stays at its initial pose until you manually start a trajectory controller from
 another terminal.
 
 ```bash
-ros2 launch drone_figure8 sim.launch.py
+ros2 launch drone_demo sim.launch.py
 ```
 
 Launch argument:
 
 ```bash
-ros2 launch drone_figure8 sim.launch.py world_file:=/path/to/drone_world.sdf
+ros2 launch drone_demo sim.launch.py world_file:=/path/to/drone_world.sdf
 ```
 
 - `world_file`: path to the SDF world file
@@ -80,7 +80,7 @@ After launching the simulation, open another terminal and run:
 cd /home/rzfly/drone_ws
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
-ros2 run drone_figure8 figure8_controller --ros-args \
+ros2 run drone_demo figure8_controller --ros-args \
   -p amplitude:=3.0 \
   -p height:=2.0 \
   -p period:=12.0 \
@@ -102,7 +102,7 @@ After launching the simulation, open another terminal and run:
 cd /home/rzfly/drone_ws
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
-ros2 run drone_figure8 circle_controller --ros-args \
+ros2 run drone_demo circle_controller --ros-args \
   -p radius:=3.0 \
   -p height:=2.0 \
   -p period:=12.0 \
@@ -134,13 +134,13 @@ source install/setup.bash
 Take a snapshot:
 
 ```bash
-ros2 run drone_figure8 drone_record snap -o snapshot.png
+ros2 run drone_demo drone_record snap -o snapshot.png
 ```
 
 Record a video:
 
 ```bash
-ros2 run drone_figure8 drone_record video -o drone_flight.mp4 -d 5
+ros2 run drone_demo drone_record video -o drone_flight.mp4 -d 5
 ```
 
 ## YOLO Detection
@@ -148,7 +148,7 @@ ros2 run drone_figure8 drone_record video -o drone_flight.mp4 -d 5
 Start the simulation first, then run:
 
 ```bash
-ros2 run drone_figure8 yolo_detector --model /path/to/yolo11n.pt
+ros2 run drone_demo yolo_detector --model /path/to/yolo11n.pt
 ```
 
 The default model path in the code points to the original development machine,
@@ -161,7 +161,7 @@ separate terminal:
 cd /home/rzfly/drone_ws
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
-ros2 run drone_figure8 laser_controller
+ros2 run drone_demo laser_controller
 ```
 
 By default, the laser is emitted from the weapon platform next to the ground
@@ -178,15 +178,15 @@ Then start YOLO detection and publish target centers:
 
 ```bash
 /home/rzfly/drone_ws/yolo_venv/bin/python3 \
-  /home/rzfly/drone_ws/src/drone_figure8/drone_figure8/yolo_detector.py \
+  /home/rzfly/drone_ws/src/drone_demo/drone_demo/yolo_detector.py \
   --model /path/to/yolo11n.pt --prediction-time 0.15
 ```
 
 ## Package Layout
 
 ```text
-src/drone_figure8/
-  drone_figure8/
+src/drone_demo/
+  drone_demo/
     figure8_controller.py   # figure-8 trajectory controller
     circle_controller.py    # circular trajectory controller
     laser_controller.py     # laser target controller
