@@ -106,6 +106,8 @@ class LaserController(Node):
         self.declare_parameter("depth_timeout", 0.5, numeric_parameter)
         self.declare_parameter("depth_sample_radius", 2, numeric_parameter)
         self.declare_parameter("depth_is_range", False, numeric_parameter)
+        self.declare_parameter("log_estimated_world", True, numeric_parameter)
+        self.declare_parameter("estimated_world_log_rate", 2.0, numeric_parameter)
 
         # 摄像机镜头世界坐标。默认值与 worlds/drone_world.sdf 中 ground_camera 对应。
         self.declare_parameter("camera_x", 7.8925, numeric_parameter)
@@ -134,6 +136,10 @@ class LaserController(Node):
         self.depth_timeout = float(self.get_parameter("depth_timeout").value)
         self.depth_sample_radius = int(self.get_parameter("depth_sample_radius").value)
         self.depth_is_range = bool(self.get_parameter("depth_is_range").value)
+        self.log_estimated_world = bool(self.get_parameter("log_estimated_world").value)
+        self.estimated_world_log_rate = float(
+            self.get_parameter("estimated_world_log_rate").value
+        )
         self.camera_pos = (
             float(self.get_parameter("camera_x").value),
             float(self.get_parameter("camera_y").value),
@@ -156,6 +162,10 @@ class LaserController(Node):
         self._last_depth_time = 0.0
         self._last_depth_warn_time = 0.0
         self._last_depth_format_warn_time = 0.0
+        self._last_estimated_world_log_time = 0.0
+        self._last_aim_source = "unknown"
+        self._last_aim_depth = None
+        self._last_aim_ray_distance = None
 
         self.add_on_set_parameters_callback(self._on_parameters_set)
         self.create_subscription(Point, "laser_target_pixel", self._on_target_pixel, 10)
@@ -190,6 +200,7 @@ class LaserController(Node):
             f"image={self.image_width:.0f}x{self.image_height:.0f}, "
             f"target=({self.target_x:.1f}, {self.target_y:.1f}), "
             f"depth={'enabled' if self.use_depth_camera else 'disabled'}, "
+            f"estimated_world_log_rate={self.estimated_world_log_rate}Hz, "
             f"rate={self.rate}Hz"
         )
 
@@ -219,6 +230,10 @@ class LaserController(Node):
                 self.depth_sample_radius = int(parameter.value)
             elif parameter.name == "depth_is_range":
                 self.depth_is_range = bool(parameter.value)
+            elif parameter.name == "log_estimated_world":
+                self.log_estimated_world = bool(parameter.value)
+            elif parameter.name == "estimated_world_log_rate":
+                self.estimated_world_log_rate = float(parameter.value)
             elif parameter.name == "camera_x":
                 self.camera_pos = (float(parameter.value), self.camera_pos[1], self.camera_pos[2])
             elif parameter.name == "camera_y":
@@ -243,9 +258,6 @@ class LaserController(Node):
     def _on_target_pixel(self, msg):
         self.target_x = float(msg.x)
         self.target_y = float(msg.y)
-        self.get_logger().info(
-            f"Laser target pixel updated from topic: ({self.target_x:.1f}, {self.target_y:.1f})"
-        )
 
     def _on_depth_image(self, msg):
         """Store the latest Gazebo depth image in meters."""
@@ -355,6 +367,9 @@ class LaserController(Node):
         depth = self.depth_at_pixel(self.target_x, self.target_y)
         if depth is None:
             aim_distance = max(0.1, self.laser_aim_distance)
+            self._last_aim_source = "fallback"
+            self._last_aim_depth = None
+            self._last_aim_ray_distance = aim_distance
             return (
                 cam[0] + camera_direction[0] * aim_distance,
                 cam[1] + camera_direction[1] * aim_distance,
@@ -368,11 +383,37 @@ class LaserController(Node):
             cos_angle = max(1e-6, sum(camera_direction[i] * forward[i] for i in range(3)))
             ray_distance = depth / cos_angle
 
+        self._last_aim_source = "depth"
+        self._last_aim_depth = depth
+        self._last_aim_ray_distance = ray_distance
         return (
             cam[0] + camera_direction[0] * ray_distance,
             cam[1] + camera_direction[1] * ray_distance,
             cam[2] + camera_direction[2] * ray_distance,
         )
+
+    def log_estimated_world_position(self, aim_point):
+        if not self.log_estimated_world:
+            return
+
+        now = time.monotonic()
+        log_rate = max(0.1, float(self.estimated_world_log_rate))
+        if now - self._last_estimated_world_log_time < 1.0 / log_rate:
+            return
+
+        if self._last_aim_depth is None:
+            depth_text = "depth=none"
+        else:
+            depth_text = f"depth={self._last_aim_depth:.3f}m"
+
+        self.get_logger().info(
+            "estimated_target_world: "
+            f"x={aim_point[0]:.3f}m, y={aim_point[1]:.3f}m, z={aim_point[2]:.3f}m, "
+            f"pixel=({self.target_x:.1f}, {self.target_y:.1f}), "
+            f"{depth_text}, ray_distance={self._last_aim_ray_distance:.3f}m, "
+            f"source={self._last_aim_source}"
+        )
+        self._last_estimated_world_log_time = now
 
     def _warn_depth_fallback(self, reason):
         now = time.monotonic()
@@ -389,6 +430,7 @@ class LaserController(Node):
 
         weapon = self.weapon_pos
         aim_point = self.target_world_position()
+        self.log_estimated_world_position(aim_point)
         laser_direction = normalize((
             aim_point[0] - weapon[0],
             aim_point[1] - weapon[1],

@@ -26,6 +26,7 @@ setup(
             "figure8_controller = drone_figure8.figure8_controller:main",
             "circle_controller = drone_figure8.circle_controller:main",
             "laser_controller = drone_figure8.laser_controller:main",
+            "drone_pose_monitor = drone_figure8.pose_monitor:main",
             "drone_record = drone_figure8.record:main",
             "drone_camera_recorder = drone_figure8.camera_recorder:main",
             "yolo_detector = drone_figure8.yolo_detector:main",
