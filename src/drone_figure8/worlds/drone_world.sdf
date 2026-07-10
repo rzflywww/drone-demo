@@ -364,7 +364,7 @@
          <topic>ground_camera</topic>
          <camera>
             <!-- 不渲染激光束（bit 0x02），避免 YOLO 把无人机+激光线误识别为风筝 -->
-            <visibility_mask>0xFFFFFFFD</visibility_mask>
+            <visibility_mask>0x3FFFFFFD</visibility_mask>
            <horizontal_fov>1.047</horizontal_fov>
             <image>
               <width>640</width>
@@ -394,7 +394,7 @@
           <visualize>false</visualize>
           <topic>ground_camera/depth</topic>
           <camera>
-            <visibility_mask>0xFFFFFFFD</visibility_mask>
+            <visibility_mask>0x3FFFFFFD</visibility_mask>
             <horizontal_fov>1.047</horizontal_fov>
             <image>
               <width>640</width>
