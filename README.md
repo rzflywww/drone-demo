@@ -179,8 +179,50 @@ Then start YOLO detection and publish target centers:
 ```bash
 /home/rzfly/drone_ws/yolo_venv/bin/python3 \
   /home/rzfly/drone_ws/src/drone_demo/drone_demo/yolo_detector.py \
-  --model /path/to/yolo11n.pt --prediction-time 0.15
+  --model /path/to/yolo11n.pt
 ```
+
+### Optional Target Filtering
+
+Target filtering is pluggable and disabled by default. With
+`--target-filter none`, the detector does not create or execute a filter and
+publishes the raw YOLO center directly.
+
+Enable the constant-acceleration Kalman filter explicitly when smoothing or
+prediction is needed:
+
+```bash
+/home/rzfly/drone_ws/yolo_venv/bin/python3 \
+  /home/rzfly/drone_ws/src/drone_demo/drone_demo/yolo_detector.py \
+  --model /path/to/yolo11n.pt \
+  --target-filter kalman --prediction-time 0.15
+```
+
+The relevant options are:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--target-filter` | `none` | Select `none` for direct publishing or `kalman` for filtering. |
+| `--prediction-time` | `0.15` | Predict this many seconds ahead. With `kalman` and `0`, position smoothing remains enabled but extrapolation is disabled. |
+| `--kalman-process-noise` | `800.0` | Higher values make velocity and acceleration estimates react faster. |
+| `--kalman-measurement-noise` | `25.0` | Higher values smooth noisy YOLO center measurements more strongly. |
+
+For smoothing without forward prediction, use:
+
+```bash
+ros2 run drone_demo yolo_detector \
+  --model /path/to/yolo11n.pt \
+  --target-filter kalman --prediction-time 0
+```
+
+Longer prediction times can amplify detection noise and can sample depth at a
+future pixel using the current depth frame. If the laser becomes unstable,
+reduce `--prediction-time` or set it to `0`.
+
+Filter implementations and their factory are kept in `target_filters.py`.
+Additional filters should provide the same `update(x, y, timestamp)` and
+`predict(lead_time)` interface, then be registered in `TARGET_FILTER_NAMES`
+and `create_target_filter()`.
 
 ## Package Layout
 
@@ -192,6 +234,7 @@ src/drone_demo/
     laser_controller.py     # laser target controller
     record.py               # snapshot/video helper
     camera_recorder.py      # Gazebo camera frame converter
+    target_filters.py       # optional target-filter implementations
     yolo_detector.py        # optional YOLO detector
   launch/
     sim.launch.py

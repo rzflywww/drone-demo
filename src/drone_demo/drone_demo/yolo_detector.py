@@ -28,6 +28,20 @@ from geometry_msgs.msg import Point
 from gz.msgs10 import image_pb2
 from gz.transport13 import Node as GzNode
 
+try:
+    from .target_filters import (
+        TARGET_FILTER_NAMES,
+        PixelKalmanFilter,
+        create_target_filter,
+    )
+except ImportError:
+    # Keep direct execution (python3 yolo_detector.py) working.
+    from target_filters import (
+        TARGET_FILTER_NAMES,
+        PixelKalmanFilter,
+        create_target_filter,
+    )
+
 # --- Constants ---
 PIXEL_FORMAT_RGB_INT8 = 3
 DEFAULT_MODEL = "/home/rzfly/ultralytics-8.3.39/ultralytics/yolo11n.pt"
@@ -74,106 +88,6 @@ def import_yolo(model_path):
     )
 
 
-class PixelKalmanFilter:
-    """Constant-acceleration Kalman filter for image-space target centers."""
-
-    def __init__(self, process_noise=800.0, measurement_noise=25.0):
-        self.process_noise = float(process_noise)
-        self.measurement_noise = float(measurement_noise)
-        self.initialized = False
-        self.last_time = None
-        self.state = np.zeros((6, 1), dtype=np.float64)
-        self.covariance = np.eye(6, dtype=np.float64) * 1000.0
-
-    def reset(self):
-        self.initialized = False
-        self.last_time = None
-        self.state.fill(0.0)
-        self.covariance = np.eye(6, dtype=np.float64) * 1000.0
-
-    def update(self, x, y, timestamp):
-        if not self.initialized:
-            self.state = np.array(
-                [[x], [y], [0.0], [0.0], [0.0], [0.0]],
-                dtype=np.float64,
-            )
-            self.covariance = np.diag(
-                [25.0, 25.0, 2500.0, 2500.0, 10000.0, 10000.0]
-            ).astype(np.float64)
-            self.initialized = True
-            self.last_time = timestamp
-            return
-
-        dt = max(1e-3, min(timestamp - self.last_time, 1.0))
-        self.last_time = timestamp
-        dt2 = dt * dt
-
-        transition = np.array(
-            [
-                [1.0, 0.0, dt, 0.0, 0.5 * dt2, 0.0],
-                [0.0, 1.0, 0.0, dt, 0.0, 0.5 * dt2],
-                [0.0, 0.0, 1.0, 0.0, dt, 0.0],
-                [0.0, 0.0, 0.0, 1.0, 0.0, dt],
-                [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-                [0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-            ],
-            dtype=np.float64,
-        )
-        dt3 = dt2 * dt
-        dt4 = dt2 * dt2
-        dt5 = dt4 * dt
-        dt6 = dt3 * dt3
-        q = self.process_noise
-        process = q * np.array(
-            [
-                [dt6 / 36.0, 0.0, dt5 / 12.0, 0.0, dt4 / 6.0, 0.0],
-                [0.0, dt6 / 36.0, 0.0, dt5 / 12.0, 0.0, dt4 / 6.0],
-                [dt5 / 12.0, 0.0, dt4 / 4.0, 0.0, dt3 / 2.0, 0.0],
-                [0.0, dt5 / 12.0, 0.0, dt4 / 4.0, 0.0, dt3 / 2.0],
-                [dt4 / 6.0, 0.0, dt3 / 2.0, 0.0, dt2, 0.0],
-                [0.0, dt4 / 6.0, 0.0, dt3 / 2.0, 0.0, dt2],
-            ],
-            dtype=np.float64,
-        )
-
-        self.state = transition @ self.state
-        self.covariance = transition @ self.covariance @ transition.T + process
-
-        measurement = np.array([[x], [y]], dtype=np.float64)
-        observation = np.array(
-            [
-                [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
-            ],
-            dtype=np.float64,
-        )
-        noise = np.eye(2, dtype=np.float64) * self.measurement_noise
-        residual = measurement - observation @ self.state
-        residual_cov = observation @ self.covariance @ observation.T + noise
-        gain = self.covariance @ observation.T @ np.linalg.inv(residual_cov)
-
-        self.state = self.state + gain @ residual
-        identity = np.eye(6, dtype=np.float64)
-        self.covariance = (identity - gain @ observation) @ self.covariance
-
-    def predict(self, lead_time):
-        if not self.initialized:
-            return None
-        lead_time = max(0.0, float(lead_time))
-        lead_time2 = lead_time * lead_time
-        x = (
-            self.state[0, 0]
-            + self.state[2, 0] * lead_time
-            + 0.5 * self.state[4, 0] * lead_time2
-        )
-        y = (
-            self.state[1, 0]
-            + self.state[3, 0] * lead_time
-            + 0.5 * self.state[5, 0] * lead_time2
-        )
-        return float(x), float(y)
-
-
 class YOLODetector:
     """Subscribes to Gazebo camera topic and runs YOLO detection in real-time."""
 
@@ -189,6 +103,7 @@ class YOLODetector:
         prediction_time,
         kalman_process_noise,
         kalman_measurement_noise,
+        target_filter_name="none",
     ):
         self.topic = topic
         self.conf_threshold = conf_threshold
@@ -196,8 +111,13 @@ class YOLODetector:
         self.publish_target = publish_target
         self.class_id = class_id
         self.class_name = class_name.lower() if class_name else None
+        self.target_filter_name = target_filter_name
         self.prediction_time = max(0.0, float(prediction_time))
-        self.kalman = PixelKalmanFilter(kalman_process_noise, kalman_measurement_noise)
+        self.target_filter = create_target_filter(
+            target_filter_name,
+            kalman_process_noise=kalman_process_noise,
+            kalman_measurement_noise=kalman_measurement_noise,
+        )
         self.frame_count = 0
         self.fps = 0.0
         self._last_fps_time = time.time()
@@ -225,10 +145,13 @@ class YOLODetector:
             callback=self._image_callback,
         )
         print(f"Subscribed to {self.topic}, waiting for frames...")
-        if self.prediction_time > 0.0:
-            print(f"Kalman prediction enabled: lead_time={self.prediction_time:.3f}s")
+        if self.target_filter is not None:
+            print(
+                f"Target filter enabled: {self.target_filter_name} "
+                f"(lead_time={self.prediction_time:.3f}s)"
+            )
         else:
-            print("Kalman prediction disabled")
+            print("Target filter disabled; publishing raw detection centers")
 
         # Latest frame storage (thread-safe via GIL for CPython)
         self._latest_frame = None
@@ -297,14 +220,14 @@ class YOLODetector:
         detections.sort(key=lambda item: item["conf"], reverse=True)
         return detections
 
-    def _update_prediction(self, detection, frame_shape):
-        if detection is None:
+    def _filter_target_center(self, detection, frame_shape):
+        if detection is None or self.target_filter is None:
             return None
 
         cx, cy = detection["center"]
         now = time.time()
-        self.kalman.update(cx, cy, now)
-        predicted = self.kalman.predict(self.prediction_time)
+        self.target_filter.update(cx, cy, now)
+        predicted = self.target_filter.predict(self.prediction_time)
         if predicted is None:
             return None
 
@@ -416,7 +339,7 @@ class YOLODetector:
             results = self.model(frame, conf=self.conf_threshold, verbose=False)
             detections = self._extract_detections(results)
             selected_detection = detections[0] if detections else None
-            target_center = self._update_prediction(selected_detection, frame.shape)
+            target_center = self._filter_target_center(selected_detection, frame.shape)
             self._publish_target(selected_detection, target_center)
 
             # Annotate frame
@@ -492,10 +415,16 @@ def main(args=None):
         help="Only use detections whose class name contains this text",
     )
     parser.add_argument(
+        "--target-filter",
+        choices=TARGET_FILTER_NAMES,
+        default="none",
+        help="Optional target-center filter; default 'none' bypasses filtering",
+    )
+    parser.add_argument(
         "--prediction-time",
         type=float,
         default=DEFAULT_PREDICTION_TIME,
-        help="Seconds to predict target motion ahead before publishing to laser; use 0 to disable",
+        help="Seconds the selected target filter predicts ahead; 0 disables extrapolation",
     )
     parser.add_argument(
         "--kalman-process-noise",
@@ -523,6 +452,7 @@ def main(args=None):
         args.prediction_time,
         args.kalman_process_noise,
         args.kalman_measurement_noise,
+        args.target_filter,
     )
     try:
         detector.run()
