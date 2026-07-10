@@ -168,6 +168,12 @@ By default, the laser is emitted from the weapon platform next to the ground
 camera. Override `weapon_x`, `weapon_y`, `weapon_z`, or `laser_aim_distance`
 with ROS parameters if you move the platform.
 
+The laser controller also subscribes to the Gazebo depth image topic
+`/ground_camera/depth` by default. When a valid depth value is available at the
+target pixel, the controller reconstructs the target's 3D world position before
+aiming the weapon platform. If depth data is unavailable, it falls back to the
+fixed `laser_aim_distance` approximation.
+
 Then start YOLO detection and publish target centers:
 
 ```bash

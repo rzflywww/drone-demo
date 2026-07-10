@@ -3,7 +3,7 @@
 
 独立节点，按需启动。输入地面摄像机画面中的像素坐标，例如 640x360
 画面的中心点 (320, 180)，节点会把该像素反投影成世界坐标系下的射线，
-再让武器平台炮口的 laser_beam 指向这条射线上的瞄准点。
+优先使用深度图把该像素还原成世界坐标，再让武器平台炮口的 laser_beam 指向该点。
 
 用法（在另一个终端中执行）:
     ros2 run drone_figure8 laser_controller --ros-args -p target_x:=320 -p target_y:=180
@@ -12,12 +12,19 @@
 """
 
 import math
+import time
 
+import numpy as np
 import rclpy
 from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 from rclpy.node import Node
 from geometry_msgs.msg import Point, Pose, Quaternion, Vector3
+from gz.msgs10 import image_pb2
+from gz.transport13 import Node as GzNode
 from simulation_interfaces.srv import SetEntityState
+
+
+PIXEL_FORMAT_R_FLOAT32 = 13
 
 
 def direction_to_quaternion(dx, dy, dz):
@@ -94,6 +101,11 @@ class LaserController(Node):
         self.declare_parameter("horizontal_fov", 1.047, numeric_parameter)
         self.declare_parameter("target_y_offset", 0.0, numeric_parameter)
         self.declare_parameter("laser_aim_distance", 15.0, numeric_parameter)
+        self.declare_parameter("use_depth_camera", True, numeric_parameter)
+        self.declare_parameter("depth_topic", "/ground_camera/depth")
+        self.declare_parameter("depth_timeout", 0.5, numeric_parameter)
+        self.declare_parameter("depth_sample_radius", 2, numeric_parameter)
+        self.declare_parameter("depth_is_range", False, numeric_parameter)
 
         # 摄像机镜头世界坐标。默认值与 worlds/drone_world.sdf 中 ground_camera 对应。
         self.declare_parameter("camera_x", 7.8925, numeric_parameter)
@@ -117,6 +129,11 @@ class LaserController(Node):
         self.horizontal_fov = float(self.get_parameter("horizontal_fov").value)
         self.target_y_offset = float(self.get_parameter("target_y_offset").value)
         self.laser_aim_distance = float(self.get_parameter("laser_aim_distance").value)
+        self.use_depth_camera = bool(self.get_parameter("use_depth_camera").value)
+        self.depth_topic = str(self.get_parameter("depth_topic").value)
+        self.depth_timeout = float(self.get_parameter("depth_timeout").value)
+        self.depth_sample_radius = int(self.get_parameter("depth_sample_radius").value)
+        self.depth_is_range = bool(self.get_parameter("depth_is_range").value)
         self.camera_pos = (
             float(self.get_parameter("camera_x").value),
             float(self.get_parameter("camera_y").value),
@@ -133,9 +150,25 @@ class LaserController(Node):
             float(self.get_parameter("camera_yaw").value),
         )
         self._last_clamped_target = None
+        self._latest_depth = None
+        self._depth_width = 0
+        self._depth_height = 0
+        self._last_depth_time = 0.0
+        self._last_depth_warn_time = 0.0
+        self._last_depth_format_warn_time = 0.0
 
         self.add_on_set_parameters_callback(self._on_parameters_set)
         self.create_subscription(Point, "laser_target_pixel", self._on_target_pixel, 10)
+
+        self.gz_node = None
+        if self.use_depth_camera:
+            self.gz_node = GzNode()
+            self.gz_node.subscribe(
+                msg_type=image_pb2.Image,
+                topic=self.depth_topic,
+                callback=self._on_depth_image,
+            )
+            self.get_logger().info(f"Subscribed to Gazebo depth topic: {self.depth_topic}")
 
         # 创建 SetEntityState 客户端（更新激光束位姿）
         set_service = "/gzserver/set_entity_state"
@@ -156,6 +189,7 @@ class LaserController(Node):
             f"weapon=({self.weapon_pos[0]}, {self.weapon_pos[1]}, {self.weapon_pos[2]}), "
             f"image={self.image_width:.0f}x{self.image_height:.0f}, "
             f"target=({self.target_x:.1f}, {self.target_y:.1f}), "
+            f"depth={'enabled' if self.use_depth_camera else 'disabled'}, "
             f"rate={self.rate}Hz"
         )
 
@@ -175,6 +209,16 @@ class LaserController(Node):
                 self.target_y_offset = float(parameter.value)
             elif parameter.name == "laser_aim_distance":
                 self.laser_aim_distance = float(parameter.value)
+            elif parameter.name == "use_depth_camera":
+                self.use_depth_camera = bool(parameter.value)
+            elif parameter.name == "depth_topic":
+                self.depth_topic = str(parameter.value)
+            elif parameter.name == "depth_timeout":
+                self.depth_timeout = float(parameter.value)
+            elif parameter.name == "depth_sample_radius":
+                self.depth_sample_radius = int(parameter.value)
+            elif parameter.name == "depth_is_range":
+                self.depth_is_range = bool(parameter.value)
             elif parameter.name == "camera_x":
                 self.camera_pos = (float(parameter.value), self.camera_pos[1], self.camera_pos[2])
             elif parameter.name == "camera_y":
@@ -202,6 +246,35 @@ class LaserController(Node):
         self.get_logger().info(
             f"Laser target pixel updated from topic: ({self.target_x:.1f}, {self.target_y:.1f})"
         )
+
+    def _on_depth_image(self, msg):
+        """Store the latest Gazebo depth image in meters."""
+        if msg.pixel_format_type != PIXEL_FORMAT_R_FLOAT32:
+            now = time.monotonic()
+            if now - self._last_depth_format_warn_time >= 2.0:
+                self.get_logger().warn(
+                    f"Depth image pixel format {msg.pixel_format_type} is unsupported; "
+                    "expected R_FLOAT32"
+                )
+                self._last_depth_format_warn_time = now
+            return
+
+        width, height = int(msg.width), int(msg.height)
+        if width <= 0 or height <= 0:
+            return
+
+        depth_values = np.frombuffer(msg.data, dtype=np.float32)
+        row_stride = int(msg.step // 4) if msg.step else width
+        if row_stride < width or depth_values.size < row_stride * height:
+            if depth_values.size < width * height:
+                return
+            row_stride = width
+
+        depth = depth_values.reshape((height, row_stride))[:, :width].copy()
+        self._latest_depth = depth
+        self._depth_width = width
+        self._depth_height = height
+        self._last_depth_time = time.monotonic()
 
     def camera_center_direction(self):
         _, pitch, yaw = self.camera_rpy
@@ -248,19 +321,74 @@ class LaserController(Node):
             forward[2] + x_offset * right[2] - y_offset * up[2],
         ))
 
+    def depth_at_pixel(self, u, v):
+        if not self.use_depth_camera or self._latest_depth is None:
+            return None
+
+        now = time.monotonic()
+        if now - self._last_depth_time > max(0.0, self.depth_timeout):
+            self._warn_depth_fallback("depth image timed out")
+            return None
+
+        if self._depth_width <= 0 or self._depth_height <= 0:
+            return None
+
+        x = int(round(min(max(float(u), 0.0), self._depth_width - 1)))
+        y = int(round(min(max(float(v) + self.target_y_offset, 0.0), self._depth_height - 1)))
+        radius = max(0, int(self.depth_sample_radius))
+        x0 = max(0, x - radius)
+        x1 = min(self._depth_width, x + radius + 1)
+        y0 = max(0, y - radius)
+        y1 = min(self._depth_height, y + radius + 1)
+
+        samples = self._latest_depth[y0:y1, x0:x1]
+        valid = samples[np.isfinite(samples) & (samples > 0.0)]
+        if valid.size == 0:
+            self._warn_depth_fallback("no valid depth at target pixel")
+            return None
+
+        return float(np.median(valid))
+
+    def target_world_position(self):
+        cam = self.camera_pos
+        camera_direction = self.pixel_to_world_direction(self.target_x, self.target_y)
+        depth = self.depth_at_pixel(self.target_x, self.target_y)
+        if depth is None:
+            aim_distance = max(0.1, self.laser_aim_distance)
+            return (
+                cam[0] + camera_direction[0] * aim_distance,
+                cam[1] + camera_direction[1] * aim_distance,
+                cam[2] + camera_direction[2] * aim_distance,
+            )
+
+        if self.depth_is_range:
+            ray_distance = depth
+        else:
+            forward = self.camera_center_direction()
+            cos_angle = max(1e-6, sum(camera_direction[i] * forward[i] for i in range(3)))
+            ray_distance = depth / cos_angle
+
+        return (
+            cam[0] + camera_direction[0] * ray_distance,
+            cam[1] + camera_direction[1] * ray_distance,
+            cam[2] + camera_direction[2] * ray_distance,
+        )
+
+    def _warn_depth_fallback(self, reason):
+        now = time.monotonic()
+        if now - self._last_depth_warn_time < 2.0:
+            return
+        self.get_logger().warn(
+            f"Using fallback laser_aim_distance={self.laser_aim_distance:.2f}m: {reason}"
+        )
+        self._last_depth_warn_time = now
+
     def timer_callback(self):
         if self._pending:
             return
 
-        cam = self.camera_pos
         weapon = self.weapon_pos
-        camera_direction = self.pixel_to_world_direction(self.target_x, self.target_y)
-        aim_distance = max(0.1, self.laser_aim_distance)
-        aim_point = (
-            cam[0] + camera_direction[0] * aim_distance,
-            cam[1] + camera_direction[1] * aim_distance,
-            cam[2] + camera_direction[2] * aim_distance,
-        )
+        aim_point = self.target_world_position()
         laser_direction = normalize((
             aim_point[0] - weapon[0],
             aim_point[1] - weapon[1],
