@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """激光指示器控制器 - 从武器平台指向地面摄像机图像中的像素位置。
 
-独立节点，按需启动。输入地面摄像机画面中的像素坐标，例如 640x360
-画面的中心点 (320, 180)，节点会把该像素反投影成世界坐标系下的射线，
+独立节点，按需启动。输入地面摄像机画面中的像素坐标，例如 1280x720
+画面的中心点 (640, 360)，节点会把该像素反投影成世界坐标系下的射线，
 优先使用深度图把该像素还原成世界坐标，再让武器平台炮口的 laser_beam 指向该点。
 可选的世界坐标卡尔曼滤波会在三维还原之后执行，避免用未来像素采样当前深度图。
 
@@ -103,11 +103,21 @@ class LaserController(Node):
         self.declare_parameter("rate", 50.0, numeric_parameter)
         self.rate = self.get_parameter("rate").value
 
-        self.declare_parameter("target_x", 320.0, numeric_parameter)
-        self.declare_parameter("target_y", 180.0, numeric_parameter)
-        self.declare_parameter("image_width", 640.0, numeric_parameter)
-        self.declare_parameter("image_height", 360.0, numeric_parameter)
-        self.declare_parameter("horizontal_fov", 1.047, numeric_parameter)
+        self.declare_parameter(
+            "target_x", scene_defaults["image_width"] / 2.0, numeric_parameter
+        )
+        self.declare_parameter(
+            "target_y", scene_defaults["image_height"] / 2.0, numeric_parameter
+        )
+        self.declare_parameter(
+            "image_width", scene_defaults["image_width"], numeric_parameter
+        )
+        self.declare_parameter(
+            "image_height", scene_defaults["image_height"], numeric_parameter
+        )
+        self.declare_parameter(
+            "horizontal_fov", scene_defaults["horizontal_fov"], numeric_parameter
+        )
         self.declare_parameter("target_y_offset", 0.0, numeric_parameter)
         self.declare_parameter("laser_aim_distance", 15.0, numeric_parameter)
         self.declare_parameter("use_depth_camera", True, numeric_parameter)

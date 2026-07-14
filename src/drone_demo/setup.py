@@ -27,6 +27,7 @@ setup(
             "figure8_controller = drone_demo.figure8_controller:main",
             "circle_controller = drone_demo.circle_controller:main",
             "laser_controller = drone_demo.laser_controller:main",
+            "llava_detector = drone_demo.llava_detector:main",
             "drone_pose_monitor = drone_demo.pose_monitor:main",
             "drone_record = drone_demo.record:main",
             "drone_camera_recorder = drone_demo.camera_recorder:main",

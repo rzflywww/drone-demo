@@ -13,6 +13,9 @@ FALLBACK_SCENE_DEFAULTS = {
     "camera_roll": 0.0,
     "camera_pitch": 0.044,
     "camera_yaw": 2.356,
+    "image_width": 1280.0,
+    "image_height": 720.0,
+    "horizontal_fov": 1.047,
     "weapon_x": 7.9601,
     "weapon_y": -7.4600,
     "weapon_z": 1.5000,
@@ -100,9 +103,21 @@ def scene_defaults_from_sdf(world_file=None):
                 camera_pose[4] + sensor_pose[4],
                 camera_pose[5] + sensor_pose[5],
             )
+            camera_config = camera_sensor.find("camera")
+            image_config = (
+                camera_config.find("image")
+                if camera_config is not None
+                else None
+            )
+            image_width = float(image_config.findtext("width"))
+            image_height = float(image_config.findtext("height"))
+            horizontal_fov = float(camera_config.findtext("horizontal_fov"))
         else:
             camera_pos = camera_pose[:3]
             camera_rpy = camera_pose[3:]
+            image_width = FALLBACK_SCENE_DEFAULTS["image_width"]
+            image_height = FALLBACK_SCENE_DEFAULTS["image_height"]
+            horizontal_fov = FALLBACK_SCENE_DEFAULTS["horizontal_fov"]
 
         weapon_pose = direct_pose(weapon_model)
         muzzle = weapon_model.find(".//visual[@name='muzzle']")
@@ -112,7 +127,7 @@ def scene_defaults_from_sdf(world_file=None):
             else (0.0, 0.0, 1.5, 0.0, 0.0, 0.0)
         )
         weapon_pos = transform_point(weapon_pose, muzzle_pose)
-    except (OSError, ET.ParseError, ValueError):
+    except (OSError, TypeError, ET.ParseError, ValueError):
         return FALLBACK_SCENE_DEFAULTS.copy()
 
     return {
@@ -122,6 +137,9 @@ def scene_defaults_from_sdf(world_file=None):
         "camera_roll": camera_rpy[0],
         "camera_pitch": camera_rpy[1],
         "camera_yaw": camera_rpy[2],
+        "image_width": image_width,
+        "image_height": image_height,
+        "horizontal_fov": horizontal_fov,
         "weapon_x": weapon_pos[0],
         "weapon_y": weapon_pos[1],
         "weapon_z": weapon_pos[2],

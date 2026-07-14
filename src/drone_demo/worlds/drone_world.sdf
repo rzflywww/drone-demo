@@ -367,8 +367,8 @@
             <visibility_mask>0x3FFFFFFD</visibility_mask>
            <horizontal_fov>1.047</horizontal_fov>
             <image>
-              <width>640</width>
-              <height>360</height>
+              <width>1280</width>
+              <height>720</height>
               <format>R8G8B8</format>
             </image>
             <clip>
@@ -397,8 +397,8 @@
             <visibility_mask>0x3FFFFFFD</visibility_mask>
             <horizontal_fov>1.047</horizontal_fov>
             <image>
-              <width>640</width>
-              <height>360</height>
+              <width>1280</width>
+              <height>720</height>
               <format>R_FLOAT32</format>
             </image>
             <clip>

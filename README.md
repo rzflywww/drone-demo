@@ -232,6 +232,27 @@ World-space filter implementations and their factory are kept in
 `predict(lead_time)`, then be registered in `TARGET_FILTER_NAMES` and
 `create_world_target_filter()`.
 
+## Remote LLaVA Detection
+
+The first-stage LLaVA bridge sends Gazebo RGB frames to an HTTP service and
+publishes the returned center on the same `/laser_target_pixel` topic used by
+the laser controller. The AutoDL service supports a mock mode so networking can
+be verified before loading a model. See
+[`autodl_server/README.md`](autodl_server/README.md) for server setup,
+SSH tunneling, and end-to-end checks.
+
+After the AutoDL service and SSH tunnel are running, start the bridge with:
+
+```bash
+cd /home/rzfly/drone_ws
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+ros2 run drone_demo llava_detector --server-url http://127.0.0.1:8000
+```
+
+The bridge intentionally sends one request at a time. Use `--interval 2.0` to
+limit requests while testing a slow model.
+
 ## Package Layout
 
 ```text
