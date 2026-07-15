@@ -1,6 +1,6 @@
 import unittest
 
-from llava_server import parse_model_answer
+from llava_server import parse_model_answer, validated_generation_options
 
 
 class ModelAnswerTest(unittest.TestCase):
@@ -51,6 +51,43 @@ class ModelAnswerTest(unittest.TestCase):
             720,
         )
         self.assertEqual(result["center"], [640.0, 360.0])
+
+
+class GenerationOptionsTest(unittest.TestCase):
+    def test_valid_options_are_normalized(self):
+        result = validated_generation_options(
+            "  locate the drone  ",
+            True,
+            0.95,
+            0.7,
+            128,
+        )
+        self.assertEqual(
+            result,
+            {
+                "prompt": "locate the drone",
+                "do_sample": True,
+                "temperature": 0.95,
+                "top_p": 0.7,
+                "max_new_tokens": 128,
+            },
+        )
+
+    def test_empty_prompt_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "prompt"):
+            validated_generation_options("  ", True, 0.95, 0.7, 128)
+
+    def test_invalid_top_p_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "top_p"):
+            validated_generation_options("prompt", True, 0.95, 1.1, 128)
+
+    def test_invalid_temperature_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "temperature"):
+            validated_generation_options("prompt", True, 0.0, 0.7, 128)
+
+    def test_invalid_token_limit_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "max_new_tokens"):
+            validated_generation_options("prompt", True, 0.95, 0.7, 0)
 
 
 if __name__ == "__main__":

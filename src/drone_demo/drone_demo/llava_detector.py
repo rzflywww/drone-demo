@@ -18,6 +18,14 @@ PIXEL_FORMAT_RGB_INT8 = 3
 DEFAULT_CAMERA_TOPIC = "/ground_camera"
 DEFAULT_TARGET_TOPIC = "/laser_target_pixel"
 DEFAULT_SERVER_URL = "http://127.0.0.1:8000"
+DEFAULT_TEMPERATURE = 0.95
+DEFAULT_TOP_P = 0.7
+DEFAULT_MAX_NEW_TOKENS = 128
+DEFAULT_PROMPT = """You are a counter-drone system operator. When a drone
+appears in an image, you need to analyze the surrounding environment and select
+the most appropriate strike plan. Available strike methods include: radio
+jamming, laser strikes, and high-energy microwave strikes. Please design a
+suitable strike plan."""
 
 
 def target_center_from_response(result, image_width, image_height):
@@ -43,6 +51,25 @@ def target_center_from_response(result, image_width, image_height):
     )
 
 
+def generation_request_data(
+    request_id,
+    prompt,
+    do_sample,
+    temperature,
+    top_p,
+    max_new_tokens,
+):
+    """Build the multipart fields understood by the remote inference service."""
+    return {
+        "request_id": str(request_id),
+        "prompt": prompt,
+        "do_sample": "true" if do_sample else "false",
+        "temperature": str(temperature),
+        "top_p": str(top_p),
+        "max_new_tokens": str(max_new_tokens),
+    }
+
+
 class RemoteLlavaDetector:
     def __init__(
         self,
@@ -52,12 +79,22 @@ class RemoteLlavaDetector:
         timeout,
         jpeg_quality,
         interval,
+        prompt,
+        do_sample,
+        temperature,
+        top_p,
+        max_new_tokens,
     ):
         self.server_url = server_url.rstrip("/")
         self.locate_url = f"{self.server_url}/locate"
         self.timeout = max(0.1, float(timeout))
         self.jpeg_quality = min(max(int(jpeg_quality), 1), 100)
         self.interval = max(0.0, float(interval))
+        self.prompt = prompt
+        self.do_sample = bool(do_sample)
+        self.temperature = float(temperature)
+        self.top_p = float(top_p)
+        self.max_new_tokens = int(max_new_tokens)
 
         self.ros_node = rclpy.create_node("llava_target_publisher")
         self.target_pub = self.ros_node.create_publisher(Point, target_topic, 10)
@@ -75,7 +112,8 @@ class RemoteLlavaDetector:
 
         self.ros_node.get_logger().info(
             f"LLaVA bridge: camera={camera_topic}, target={target_topic}, "
-            f"server={self.locate_url}"
+            f"server={self.locate_url}, sample={self.do_sample}, "
+            f"temperature={self.temperature}, top_p={self.top_p}"
         )
 
     def close(self):
@@ -127,7 +165,14 @@ class RemoteLlavaDetector:
 
         response = requests.post(
             self.locate_url,
-            data={"request_id": str(frame_id)},
+            data=generation_request_data(
+                frame_id,
+                self.prompt,
+                self.do_sample,
+                self.temperature,
+                self.top_p,
+                self.max_new_tokens,
+            ),
             files={"image": ("frame.jpg", encoded.tobytes(), "image/jpeg")},
             timeout=self.timeout,
         )
@@ -176,6 +221,21 @@ def main(args=None):
     parser.add_argument("--target-topic", default=DEFAULT_TARGET_TOPIC)
     parser.add_argument("--timeout", type=float, default=120.0)
     parser.add_argument("--jpeg-quality", type=int, default=85)
+    parser.add_argument("--prompt", default=DEFAULT_PROMPT)
+    parser.add_argument(
+        "--do-sample",
+        dest="do_sample",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument("--no-sample", dest="do_sample", action="store_false")
+    parser.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE)
+    parser.add_argument("--top-p", type=float, default=DEFAULT_TOP_P)
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=DEFAULT_MAX_NEW_TOKENS,
+    )
     parser.add_argument(
         "--interval",
         type=float,
@@ -192,6 +252,11 @@ def main(args=None):
         parsed.timeout,
         parsed.jpeg_quality,
         parsed.interval,
+        parsed.prompt,
+        parsed.do_sample,
+        parsed.temperature,
+        parsed.top_p,
+        parsed.max_new_tokens,
     )
     try:
         detector.run()

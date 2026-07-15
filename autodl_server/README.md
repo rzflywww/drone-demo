@@ -124,6 +124,14 @@ memory by PEFT when the service starts.
 
 - `image`: JPEG or PNG image
 - `request_id`: integer copied into the response
+- `prompt`: optional instruction; defaults to the deployed model prompt
+- `do_sample`: `true` or `false`, default `true`
+- `temperature`: positive number, default `0.95`
+- `top_p`: number in `(0, 1]`, default `0.7`
+- `max_new_tokens`: integer in `1..1024`, default `128`
+
+These generation fields are applied per request. Changing them does not restart
+the service or reload the base model and LoRA.
 
 Successful detection response:
 
@@ -135,6 +143,12 @@ Successful detection response:
   "request_id": 1,
   "image_width": 1280,
   "image_height": 720,
+  "generation": {
+    "do_sample": true,
+    "temperature": 0.95,
+    "top_p": 0.7,
+    "max_new_tokens": 128
+  },
   "raw_answer": "..."
 }
 ```

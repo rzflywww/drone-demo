@@ -251,7 +251,20 @@ ros2 run drone_demo llava_detector --server-url http://127.0.0.1:8000
 ```
 
 The bridge intentionally sends one request at a time. Use `--interval 2.0` to
-limit requests while testing a slow model.
+limit requests while testing a slow model. The prompt and generation settings
+are sent with every image, so changing them does not restart or reload the
+remote model. For example:
+
+```bash
+ros2 run drone_demo llava_detector \
+  --server-url http://127.0.0.1:8000 \
+  --temperature 0.95 \
+  --top-p 0.7 \
+  --max-new-tokens 128
+```
+
+Use `--no-sample` for greedy decoding. Override the trained instruction with
+`--prompt "..."` only when testing a different prompt.
 
 ## Package Layout
 

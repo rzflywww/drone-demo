@@ -1,6 +1,9 @@
 import unittest
 
-from drone_demo.llava_detector import target_center_from_response
+from drone_demo.llava_detector import (
+    generation_request_data,
+    target_center_from_response,
+)
 
 
 class LlavaResponseTest(unittest.TestCase):
@@ -35,6 +38,27 @@ class LlavaResponseTest(unittest.TestCase):
                 640,
                 360,
             )
+
+    def test_generation_fields_are_encoded_for_multipart_request(self):
+        result = generation_request_data(
+            42,
+            "locate the drone",
+            True,
+            0.95,
+            0.7,
+            128,
+        )
+        self.assertEqual(
+            result,
+            {
+                "request_id": "42",
+                "prompt": "locate the drone",
+                "do_sample": "true",
+                "temperature": "0.95",
+                "top_p": "0.7",
+                "max_new_tokens": "128",
+            },
+        )
 
 
 if __name__ == "__main__":

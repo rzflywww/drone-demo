@@ -3,6 +3,7 @@
 
 import io
 import json
+import math
 import os
 import re
 from contextlib import asynccontextmanager
@@ -26,6 +27,8 @@ TRUST_REMOTE_CODE = os.environ.get("LLAVA_TRUST_REMOTE_CODE", "false").lower() i
     "on",
 }
 MAX_NEW_TOKENS = int(os.environ.get("LLAVA_MAX_NEW_TOKENS", "128"))
+TEMPERATURE = float(os.environ.get("LLAVA_TEMPERATURE", "0.95"))
+TOP_P = float(os.environ.get("LLAVA_TOP_P", "0.7"))
 REQUIRE_CUDA = os.environ.get("LLAVA_REQUIRE_CUDA", "true").lower() in {
     "1",
     "true",
@@ -85,13 +88,22 @@ class LlavaBackend:
             self.prompt = BBOX_PROMPT
         self.model.eval()
 
-    def locate(self, image):
+    def locate(
+        self,
+        image,
+        prompt=None,
+        do_sample=True,
+        temperature=TEMPERATURE,
+        top_p=TOP_P,
+        max_new_tokens=MAX_NEW_TOKENS,
+    ):
+        prompt = prompt or self.prompt
         messages = [
             {
                 "role": "user",
                 "content": [
                     {"type": "image"},
-                    {"type": "text", "text": self.prompt},
+                    {"type": "text", "text": prompt},
                 ],
             }
         ]
@@ -113,11 +125,16 @@ class LlavaBackend:
         }
 
         with self.torch.inference_mode():
-            output = self.model.generate(
-                **inputs,
-                max_new_tokens=MAX_NEW_TOKENS,
-                do_sample=False,
-            )
+            generation_options = {
+                "max_new_tokens": max_new_tokens,
+                "do_sample": do_sample,
+            }
+            if do_sample:
+                generation_options.update(
+                    temperature=temperature,
+                    top_p=top_p,
+                )
+            output = self.model.generate(**inputs, **generation_options)
 
         input_length = inputs["input_ids"].shape[1]
         return self.processor.batch_decode(
@@ -194,6 +211,34 @@ def parse_model_answer(answer, width, height):
     raise ValueError(f"model did not return a supported coordinate: {answer!r}")
 
 
+def validated_generation_options(
+    prompt,
+    do_sample,
+    temperature,
+    top_p,
+    max_new_tokens,
+):
+    """Validate request-controlled generation settings."""
+    prompt = prompt.strip()
+    if not prompt:
+        raise ValueError("prompt must not be empty")
+    if len(prompt) > 8192:
+        raise ValueError("prompt must contain at most 8192 characters")
+    if not math.isfinite(temperature) or temperature <= 0.0:
+        raise ValueError("temperature must be greater than 0")
+    if not math.isfinite(top_p) or not 0.0 < top_p <= 1.0:
+        raise ValueError("top_p must be within (0, 1]")
+    if not 1 <= max_new_tokens <= 1024:
+        raise ValueError("max_new_tokens must be within 1..1024")
+    return {
+        "prompt": prompt,
+        "do_sample": bool(do_sample),
+        "temperature": float(temperature),
+        "top_p": float(top_p),
+        "max_new_tokens": int(max_new_tokens),
+    }
+
+
 @asynccontextmanager
 async def lifespan(app):
     app.state.backend = None
@@ -220,6 +265,12 @@ def health():
         "mode": "mock" if MOCK_MODE else "llava",
         "model_path": MODEL_PATH or None,
         "adapter_path": ADAPTER_PATH or None,
+        "generation": {
+            "do_sample": True,
+            "temperature": TEMPERATURE,
+            "top_p": TOP_P,
+            "max_new_tokens": MAX_NEW_TOKENS,
+        },
     }
 
 
@@ -227,12 +278,31 @@ def health():
 async def locate(
     image: UploadFile = File(...),
     request_id: int = Form(0),
+    prompt: str = Form(""),
+    do_sample: bool = Form(True),
+    temperature: float = Form(TEMPERATURE),
+    top_p: float = Form(TOP_P),
+    max_new_tokens: int = Form(MAX_NEW_TOKENS),
 ):
     try:
         image_bytes = await image.read()
         pil_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"invalid image: {exc}") from exc
+
+    default_prompt = (
+        app.state.backend.prompt if app.state.backend is not None else CENTER_PROMPT
+    )
+    try:
+        generation = validated_generation_options(
+            prompt or default_prompt,
+            do_sample,
+            temperature,
+            top_p,
+            max_new_tokens,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     width, height = pil_image.size
     if MOCK_MODE:
@@ -250,7 +320,7 @@ async def locate(
             "raw_answer": None,
         }
     else:
-        raw_answer = app.state.backend.locate(pil_image)
+        raw_answer = app.state.backend.locate(pil_image, **generation)
         try:
             result = parse_model_answer(raw_answer, width, height)
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -265,6 +335,11 @@ async def locate(
             "request_id": request_id,
             "image_width": width,
             "image_height": height,
+            "generation": {
+                name: value
+                for name, value in generation.items()
+                if name != "prompt"
+            },
         }
     )
     return result

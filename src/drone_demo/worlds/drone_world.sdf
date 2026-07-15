@@ -496,6 +496,7 @@
      <pose>0 0 -100 0 0 0</pose>
 
      <link name="beam_link">
+       <gravity>false</gravity>
        <visual name="beam">
          <cast_shadows>false</cast_shadows>
           <visibility_flags>0x02</visibility_flags>
