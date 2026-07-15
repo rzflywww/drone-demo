@@ -3,6 +3,10 @@
 
 import argparse
 import math
+import os
+import shutil
+import signal
+import subprocess
 import time
 
 import cv2
@@ -21,6 +25,7 @@ DEFAULT_SERVER_URL = "http://127.0.0.1:8000"
 DEFAULT_TEMPERATURE = 0.95
 DEFAULT_TOP_P = 0.7
 DEFAULT_MAX_NEW_TOKENS = 128
+DEFAULT_LASER_TRIGGER_PHRASE = "laser strikes"
 DEFAULT_PROMPT = """You are a counter-drone system operator. When a drone
 appears in an image, you need to analyze the surrounding environment and select
 the most appropriate strike plan. Available strike methods include: radio
@@ -70,6 +75,13 @@ def generation_request_data(
     }
 
 
+def answer_contains_trigger(raw_answer, trigger_phrase):
+    """Return whether a model answer contains the configured trigger phrase."""
+    if not isinstance(raw_answer, str) or not trigger_phrase:
+        return False
+    return trigger_phrase.casefold() in raw_answer.casefold()
+
+
 class RemoteLlavaDetector:
     def __init__(
         self,
@@ -84,6 +96,9 @@ class RemoteLlavaDetector:
         temperature,
         top_p,
         max_new_tokens,
+        auto_start_laser,
+        laser_trigger_phrase,
+        laser_startup_timeout,
     ):
         self.server_url = server_url.rstrip("/")
         self.locate_url = f"{self.server_url}/locate"
@@ -95,6 +110,12 @@ class RemoteLlavaDetector:
         self.temperature = float(temperature)
         self.top_p = float(top_p)
         self.max_new_tokens = int(max_new_tokens)
+        self.auto_start_laser = bool(auto_start_laser)
+        self.laser_trigger_phrase = str(laser_trigger_phrase)
+        self.laser_startup_timeout = max(0.0, float(laser_startup_timeout))
+        self._trigger_handled = False
+        self._tracking_handed_off = False
+        self._managed_processes = {}
 
         self.ros_node = rclpy.create_node("llava_target_publisher")
         self.target_pub = self.ros_node.create_publisher(Point, target_topic, 10)
@@ -113,11 +134,147 @@ class RemoteLlavaDetector:
         self.ros_node.get_logger().info(
             f"LLaVA bridge: camera={camera_topic}, target={target_topic}, "
             f"server={self.locate_url}, sample={self.do_sample}, "
-            f"temperature={self.temperature}, top_p={self.top_p}"
+            f"temperature={self.temperature}, top_p={self.top_p}, "
+            f"auto_laser={self.auto_start_laser}, "
+            f"laser_trigger={self.laser_trigger_phrase!r}"
         )
 
     def close(self):
+        self._stop_managed_processes()
         self.ros_node.destroy_node()
+
+    def _node_is_running(self, node_name):
+        return any(
+            name == node_name
+            for name, _namespace in self.ros_node.get_node_names_and_namespaces()
+        )
+
+    def _start_managed_node(self, executable, node_name, extra_args=None):
+        if self._node_is_running(node_name):
+            self.ros_node.get_logger().info(
+                f"Trigger action reusing existing ROS node {node_name}"
+            )
+            return True
+
+        existing = self._managed_processes.get(executable)
+        if existing is not None and existing.poll() is None:
+            return True
+
+        ros2 = shutil.which("ros2")
+        if ros2 is None:
+            self.ros_node.get_logger().error(
+                f"Cannot start {executable}: the ros2 executable was not found"
+            )
+            return False
+
+        try:
+            command = [ros2, "run", "drone_demo", executable]
+            if extra_args:
+                command.extend(extra_args)
+            process = subprocess.Popen(
+                command,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            self.ros_node.get_logger().error(
+                f"Failed to start {executable}: {exc}"
+            )
+            return False
+
+        self._managed_processes[executable] = process
+        self.ros_node.get_logger().warn(
+            f"Started {executable} pid={process.pid}"
+        )
+        return True
+
+    def _wait_for_nodes(self, node_names):
+        deadline = time.monotonic() + self.laser_startup_timeout
+        while rclpy.ok() and time.monotonic() < deadline:
+            if all(self._node_is_running(name) for name in node_names):
+                return True
+            for executable, process in self._managed_processes.items():
+                return_code = process.poll()
+                if return_code is not None:
+                    self.ros_node.get_logger().error(
+                        f"{executable} exited during startup with code {return_code}"
+                    )
+                    return False
+            rclpy.spin_once(self.ros_node, timeout_sec=0.05)
+        return all(self._node_is_running(name) for name in node_names)
+
+    def _maybe_handoff_to_yolo(self, raw_answer):
+        if not self.auto_start_laser or self._trigger_handled:
+            return False
+        if not answer_contains_trigger(raw_answer, self.laser_trigger_phrase):
+            return False
+
+        self._trigger_handled = True
+        self.ros_node.get_logger().warn(
+            f"Trigger {self.laser_trigger_phrase!r} matched; "
+            "starting laser_controller and yolo_detector"
+        )
+
+        laser_started = self._start_managed_node(
+            "laser_controller",
+            "laser_controller",
+            [
+                "--ros-args",
+                "-p",
+                "world_target_filter:=kalman",
+                "-p",
+                "world_prediction_time:=0.15",
+            ],
+        )
+        yolo_started = self._start_managed_node(
+            "yolo_detector",
+            "yolo_target_publisher",
+        )
+        nodes_ready = laser_started and yolo_started and self._wait_for_nodes(
+            {"laser_controller", "yolo_target_publisher"}
+        )
+        if not nodes_ready:
+            self.ros_node.get_logger().error(
+                "YOLO handoff failed; keeping LLaVA target publishing active"
+            )
+            self._stop_managed_processes()
+            self._trigger_handled = False
+            return False
+
+        self._tracking_handed_off = True
+        self.ros_node.destroy_publisher(self.target_pub)
+        self.target_pub = None
+        self.ros_node.get_logger().warn(
+            "YOLO handoff complete; LLaVA target publishing and inference stopped"
+        )
+        return True
+
+    @staticmethod
+    def _stop_process(process):
+        if process is None or process.poll() is not None:
+            return
+
+        try:
+            os.killpg(process.pid, signal.SIGINT)
+            process.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+                process.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait(timeout=2.0)
+                except ProcessLookupError:
+                    pass
+            except ProcessLookupError:
+                pass
+        except ProcessLookupError:
+            pass
+
+    def _stop_managed_processes(self):
+        for executable in ("yolo_detector", "laser_controller"):
+            self._stop_process(self._managed_processes.get(executable))
+        self._managed_processes.clear()
 
     def check_server(self):
         response = requests.get(
@@ -142,6 +299,9 @@ class RemoteLlavaDetector:
         self._latest_frame_id += 1
 
     def process_latest_frame(self):
+        if self._tracking_handed_off:
+            return False
+
         frame = self._latest_frame
         frame_id = self._latest_frame_id
         if frame is None or frame_id == self._processed_frame_id:
@@ -184,6 +344,9 @@ class RemoteLlavaDetector:
             raise ValueError(
                 f"response request_id {response_id} does not match {frame_id}"
             )
+
+        if self._maybe_handoff_to_yolo(result.get("raw_answer")):
+            return True
 
         center = target_center_from_response(result, width, height)
         if center is None:
@@ -237,6 +400,22 @@ def main(args=None):
         default=DEFAULT_MAX_NEW_TOKENS,
     )
     parser.add_argument(
+        "--laser-trigger-phrase",
+        default=DEFAULT_LASER_TRIGGER_PHRASE,
+    )
+    parser.add_argument(
+        "--auto-start-laser",
+        dest="auto_start_laser",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--no-auto-laser",
+        dest="auto_start_laser",
+        action="store_false",
+    )
+    parser.add_argument("--laser-startup-timeout", type=float, default=5.0)
+    parser.add_argument(
         "--interval",
         type=float,
         default=0.0,
@@ -257,6 +436,9 @@ def main(args=None):
         parsed.temperature,
         parsed.top_p,
         parsed.max_new_tokens,
+        parsed.auto_start_laser,
+        parsed.laser_trigger_phrase,
+        parsed.laser_startup_timeout,
     )
     try:
         detector.run()

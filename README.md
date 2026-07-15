@@ -266,6 +266,35 @@ ros2 run drone_demo llava_detector \
 Use `--no-sample` for greedy decoding. Override the trained instruction with
 `--prompt "..."` only when testing a different prompt.
 
+By default, the bridge checks each successful model response for the phrase
+`laser strikes` (case-insensitive). The first match starts `laser_controller`
+and `yolo_detector` as separate ROS processes. After both nodes are discovered,
+the bridge stops sending images to LLaVA and stops publishing LLaVA centers;
+YOLO becomes the only publisher driving `/laser_target_pixel`. Already-running
+nodes are reused instead of duplicated. Processes started by the bridge are
+stopped when the bridge exits.
+
+The automatically started laser controller uses world-space Kalman filtering:
+
+```bash
+ros2 run drone_demo laser_controller --ros-args \
+  -p world_target_filter:=kalman \
+  -p world_prediction_time:=0.15
+```
+
+An already-running external laser controller keeps its existing parameters.
+
+Change or disable this behavior with:
+
+```bash
+ros2 run drone_demo llava_detector \
+  --laser-trigger-phrase "laser strikes"
+
+ros2 run drone_demo llava_detector --no-auto-laser
+```
+
+The second command disables the entire automatic laser-and-YOLO handoff.
+
 ## Package Layout
 
 ```text
