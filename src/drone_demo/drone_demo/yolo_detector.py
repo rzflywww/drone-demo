@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Real-time YOLO11n object detection on Gazebo ground_camera feed.
+Real-time YOLO object detection on Gazebo ground_camera feed.
 
 Subscribes to /ground_camera via gz.transport13 Python bindings,
-runs YOLO11n inference, and displays annotated video with cv2.imshow.
+runs YOLO inference, and displays annotated video with cv2.imshow.
 
 Usage:
     # With Gazebo running (after source venv + ROS 2 setup):
@@ -33,7 +33,7 @@ PIXEL_FORMAT_RGB_INT8 = 3
 DEFAULT_MODEL = "/home/rzfly/ultralytics-8.3.39/ultralytics/yolo11n.pt"
 DEFAULT_TOPIC = "/ground_camera"
 DEFAULT_CONF = 0.25
-DEFAULT_TARGET_TOPIC = "/laser_target_pixel"
+DEFAULT_TARGET_TOPIC = "/countermeasure_target_pixel"
 YOLO_VENV_SITE_PACKAGES = Path(
     "/home/rzfly/drone_ws/yolo_venv/lib/python3.12/site-packages"
 )
@@ -297,7 +297,7 @@ class YOLODetector:
             )
 
             # Display
-            cv2.imshow("YOLO11 Detection - Ground Camera", annotated)
+            cv2.imshow("YOLO Detection - Ground Camera", annotated)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
 
@@ -307,7 +307,7 @@ class YOLODetector:
 
 def main(args=None):
     parser = argparse.ArgumentParser(
-        description="Real-time YOLO11n detection on Gazebo ground camera"
+        description="Real-time YOLO detection on Gazebo ground camera"
     )
     parser.add_argument(
         "--model",

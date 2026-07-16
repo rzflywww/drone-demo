@@ -20,12 +20,13 @@ from gz.transport13 import Node as GzNode
 
 PIXEL_FORMAT_RGB_INT8 = 3
 DEFAULT_CAMERA_TOPIC = "/ground_camera"
-DEFAULT_TARGET_TOPIC = "/laser_target_pixel"
+DEFAULT_TARGET_TOPIC = "/countermeasure_target_pixel"
 DEFAULT_SERVER_URL = "http://127.0.0.1:8000"
 DEFAULT_TEMPERATURE = 0.95
 DEFAULT_TOP_P = 0.7
 DEFAULT_MAX_NEW_TOKENS = 128
 DEFAULT_LASER_TRIGGER_PHRASE = "laser strikes"
+DEFAULT_RADIO_JAMMING_PHRASE = "radio jamming"
 DEFAULT_PROMPT = """You are a counter-drone system operator. When a drone
 appears in an image, you need to analyze the surrounding environment and select
 the most appropriate strike plan. Available strike methods include: radio
@@ -99,6 +100,8 @@ class RemoteLlavaDetector:
         auto_start_laser,
         laser_trigger_phrase,
         laser_startup_timeout,
+        radio_jamming_phrase,
+        auto_start_radio_jamming,
     ):
         self.server_url = server_url.rstrip("/")
         self.locate_url = f"{self.server_url}/locate"
@@ -112,9 +115,12 @@ class RemoteLlavaDetector:
         self.max_new_tokens = int(max_new_tokens)
         self.auto_start_laser = bool(auto_start_laser)
         self.laser_trigger_phrase = str(laser_trigger_phrase)
+        self.radio_jamming_phrase = str(radio_jamming_phrase)
+        self.auto_start_radio_jamming = bool(auto_start_radio_jamming)
         self.laser_startup_timeout = max(0.0, float(laser_startup_timeout))
         self._trigger_handled = False
         self._tracking_handed_off = False
+        self._llava_tracking_locked = False
         self._managed_processes = {}
 
         self.ros_node = rclpy.create_node("llava_target_publisher")
@@ -136,7 +142,9 @@ class RemoteLlavaDetector:
             f"server={self.locate_url}, sample={self.do_sample}, "
             f"temperature={self.temperature}, top_p={self.top_p}, "
             f"auto_laser={self.auto_start_laser}, "
-            f"laser_trigger={self.laser_trigger_phrase!r}"
+            f"laser_trigger={self.laser_trigger_phrase!r}, "
+            f"radio_jamming_trigger={self.radio_jamming_phrase!r}, "
+            f"auto_radio_jamming={self.auto_start_radio_jamming}"
         )
 
     def close(self):
@@ -203,7 +211,11 @@ class RemoteLlavaDetector:
         return all(self._node_is_running(name) for name in node_names)
 
     def _maybe_handoff_to_yolo(self, raw_answer):
-        if not self.auto_start_laser or self._trigger_handled:
+        if (
+            not self.auto_start_laser
+            or self._trigger_handled
+            or self._llava_tracking_locked
+        ):
             return False
         if not answer_contains_trigger(raw_answer, self.laser_trigger_phrase):
             return False
@@ -248,6 +260,44 @@ class RemoteLlavaDetector:
         )
         return True
 
+    def _maybe_lock_llava_tracking(self, raw_answer):
+        """Keep LLaVA as the target source after a radio-jamming decision."""
+        if self._llava_tracking_locked:
+            return True
+        if self._tracking_handed_off:
+            return False
+        if answer_contains_trigger(raw_answer, self.laser_trigger_phrase):
+            return False
+        if not answer_contains_trigger(raw_answer, self.radio_jamming_phrase):
+            return False
+
+        self._llava_tracking_locked = True
+        self.ros_node.get_logger().warn(
+            f"Trigger {self.radio_jamming_phrase!r} matched without "
+            f"{self.laser_trigger_phrase!r}; keeping LLaVA target publishing active "
+            "and disabling YOLO handoff"
+        )
+
+        if self.auto_start_radio_jamming:
+            radio_started = self._start_managed_node(
+                "radio_jamming_controller",
+                "radio_jamming_controller",
+            )
+            radio_ready = radio_started and self._wait_for_nodes(
+                {"radio_jamming_controller"}
+            )
+            if not radio_ready:
+                self.ros_node.get_logger().error(
+                    "Radio-jamming controller failed to start; LLaVA center "
+                    "publishing remains active"
+                )
+                process = self._managed_processes.pop(
+                    "radio_jamming_controller",
+                    None,
+                )
+                self._stop_process(process)
+        return True
+
     @staticmethod
     def _stop_process(process):
         if process is None or process.poll() is not None:
@@ -272,7 +322,11 @@ class RemoteLlavaDetector:
             pass
 
     def _stop_managed_processes(self):
-        for executable in ("yolo_detector", "laser_controller"):
+        for executable in (
+            "yolo_detector",
+            "laser_controller",
+            "radio_jamming_controller",
+        ):
             self._stop_process(self._managed_processes.get(executable))
         self._managed_processes.clear()
 
@@ -345,8 +399,10 @@ class RemoteLlavaDetector:
                 f"response request_id {response_id} does not match {frame_id}"
             )
 
-        if self._maybe_handoff_to_yolo(result.get("raw_answer")):
+        raw_answer = result.get("raw_answer")
+        if self._maybe_handoff_to_yolo(raw_answer):
             return True
+        self._maybe_lock_llava_tracking(raw_answer)
 
         center = target_center_from_response(result, width, height)
         if center is None:
@@ -404,6 +460,21 @@ def main(args=None):
         default=DEFAULT_LASER_TRIGGER_PHRASE,
     )
     parser.add_argument(
+        "--radio-jamming-phrase",
+        default=DEFAULT_RADIO_JAMMING_PHRASE,
+    )
+    parser.add_argument(
+        "--auto-start-radio-jamming",
+        dest="auto_start_radio_jamming",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--no-auto-start-radio-jamming",
+        dest="auto_start_radio_jamming",
+        action="store_false",
+    )
+    parser.add_argument(
         "--auto-start-laser",
         dest="auto_start_laser",
         action="store_true",
@@ -439,6 +510,8 @@ def main(args=None):
         parsed.auto_start_laser,
         parsed.laser_trigger_phrase,
         parsed.laser_startup_timeout,
+        parsed.radio_jamming_phrase,
+        parsed.auto_start_radio_jamming,
     )
     try:
         detector.run()

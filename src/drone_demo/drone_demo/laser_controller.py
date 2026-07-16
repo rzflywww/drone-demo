@@ -8,7 +8,7 @@
 
 用法（在另一个终端中执行）:
     ros2 run drone_demo laser_controller --ros-args -p target_x:=320 -p target_y:=180
-    ros2 topic pub --once /laser_target_pixel geometry_msgs/msg/Point "{x: 320.0, y: 180.0, z: 0.0}"
+    ros2 topic pub --once /countermeasure_target_pixel geometry_msgs/msg/Point "{x: 320.0, y: 180.0, z: 0.0}"
     # Ctrl+C 停止后激光束会被隐藏
 """
 
@@ -25,6 +25,7 @@ from gz.transport13 import Node as GzNode
 from simulation_interfaces.srv import SetEntityState
 
 from drone_demo.scene_config import scene_defaults_from_sdf
+from drone_demo.target_geometry import direction_to_quaternion, normalize, cross
 from drone_demo.target_filters import (
     DEFAULT_WORLD_MEASUREMENT_NOISE,
     DEFAULT_WORLD_PROCESS_NOISE,
@@ -33,64 +34,6 @@ from drone_demo.target_filters import (
 )
 
 PIXEL_FORMAT_R_FLOAT32 = 13
-
-
-def direction_to_quaternion(dx, dy, dz):
-    """将方向向量转为四元数，使局部 +Z 轴指向该方向。
-
-    给定方向 (dx, dy, dz)，返回一个四元数，其旋转将
-    局部 Z 轴 (0,0,1) 映射到该单位方向向量上。
-    """
-    norm = math.sqrt(dx * dx + dy * dy + dz * dz)
-    if norm < 1e-10:
-        return Quaternion(w=1.0, x=0.0, y=0.0, z=0.0)
-
-    dx, dy, dz = dx / norm, dy / norm, dz / norm
-
-    # z_hat 与 direction 的点积
-    dot = dz  # z_hat = (0,0,1)
-
-    if dot > 0.99999:
-        # 已指向 +Z
-        return Quaternion(w=1.0, x=0.0, y=0.0, z=0.0)
-
-    if dot < -0.99999:
-        # 指向 -Z，绕 X 轴旋转 180°
-        return Quaternion(w=0.0, x=1.0, y=0.0, z=0.0)
-
-    # 一般情况：旋转轴 = z_hat × d = (-dy, dx, 0)
-    axis_x = -dy
-    axis_y = dx
-    axis_norm = math.sqrt(axis_x * axis_x + axis_y * axis_y)
-    axis_x /= axis_norm
-    axis_y /= axis_norm
-
-    angle = math.acos(max(-1.0, min(1.0, dot)))
-    half = angle / 2.0
-    w = math.cos(half)
-    s = math.sin(half)
-
-    return Quaternion(
-        w=w,
-        x=s * axis_x,
-        y=s * axis_y,
-        z=0.0,
-    )
-
-
-def normalize(vector):
-    norm = math.sqrt(sum(value * value for value in vector))
-    if norm < 1e-10:
-        raise ValueError("Cannot normalize a near-zero vector")
-    return tuple(value / norm for value in vector)
-
-
-def cross(a, b):
-    return (
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    )
 
 
 class LaserController(Node):
@@ -227,7 +170,12 @@ class LaserController(Node):
         self._world_filter_last_update_time = None
 
         self.add_on_set_parameters_callback(self._on_parameters_set)
-        self.create_subscription(Point, "laser_target_pixel", self._on_target_pixel, 10)
+        self.create_subscription(
+            Point,
+            "countermeasure_target_pixel",
+            self._on_target_pixel,
+            10,
+        )
 
         self.gz_node = GzNode()
         self.gz_node.subscribe(

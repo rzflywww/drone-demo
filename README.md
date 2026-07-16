@@ -153,7 +153,7 @@ ros2 run drone_demo yolo_detector
 
 This workspace uses
 `/home/rzfly/ultralytics-8.3.39/ultralytics/yolo11n.pt` by default. Override it
-with `--model /path/to/yolo11n.pt` after moving the project to another machine.
+with `--model /path/to/model.pt` after moving the project to another machine.
 
 To aim the laser at detected target centers, start the laser controller in a
 separate terminal:
@@ -180,7 +180,7 @@ Then start YOLO detection and publish target centers:
 ```bash
 /home/rzfly/drone_ws/yolo_venv/bin/python3 \
   /home/rzfly/drone_ws/src/drone_demo/drone_demo/yolo_detector.py \
-  --model /path/to/yolo11n.pt
+  --model /path/to/model.pt
 ```
 
 ### Recommended World-Space Prediction
@@ -235,8 +235,8 @@ World-space filter implementations and their factory are kept in
 ## Remote LLaVA Detection
 
 The first-stage LLaVA bridge sends Gazebo RGB frames to an HTTP service and
-publishes the returned center on the same `/laser_target_pixel` topic used by
-the laser controller. The AutoDL service supports a mock mode so networking can
+publishes the returned center on the shared `/countermeasure_target_pixel`
+topic. The AutoDL service supports a mock mode so networking can
 be verified before loading a model. See
 [`autodl_server/README.md`](autodl_server/README.md) for server setup,
 SSH tunneling, and end-to-end checks.
@@ -270,9 +270,27 @@ By default, the bridge checks each successful model response for the phrase
 `laser strikes` (case-insensitive). The first match starts `laser_controller`
 and `yolo_detector` as separate ROS processes. After both nodes are discovered,
 the bridge stops sending images to LLaVA and stops publishing LLaVA centers;
-YOLO becomes the only publisher driving `/laser_target_pixel`. Already-running
+YOLO becomes the only publisher driving `/countermeasure_target_pixel`. Already-running
 nodes are reused instead of duplicated. Processes started by the bridge are
 stopped when the bridge exits.
+
+If a response contains `radio jamming` but does not contain `laser strikes`,
+the bridge starts `radio_jamming_controller` and locks target publishing to
+LLaVA. It continues sending camera frames to LLaVA and publishes each returned
+center directly to `/countermeasure_target_pixel`; later responses cannot start
+the YOLO handoff for that bridge process.
+
+The radio controller back-projects each pixel using the configured camera pose
+and a fixed `jamming_aim_distance` of 15 meters. It does not subscribe to the
+depth camera. For the success decision only, it reads the quadcopter's Gazebo
+ground-truth pose from `/world/drone_world/pose/info` and checks that the drone
+center is geometrically inside the 22-meter cone. Coverage time accumulates only
+while the target stays inside; leaving the cone or losing fresh pose data resets
+the timer. Five uninterrupted seconds publishes `true` on
+`/radio_jamming/success`. This is a visual/status effect only; the drone keeps
+following its original trajectory. The cone is visible in the Gazebo GUI but
+excluded from the ground RGB and depth cameras so it cannot affect later LLaVA
+responses.
 
 The automatically started laser controller uses world-space Kalman filtering:
 
@@ -290,6 +308,11 @@ Change or disable this behavior with:
 ros2 run drone_demo llava_detector \
   --laser-trigger-phrase "laser strikes"
 
+ros2 run drone_demo llava_detector \
+  --radio-jamming-phrase "radio jamming"
+
+ros2 run drone_demo llava_detector --no-auto-start-radio-jamming
+
 ros2 run drone_demo llava_detector --no-auto-laser
 ```
 
@@ -303,9 +326,11 @@ src/drone_demo/
     figure8_controller.py   # figure-8 trajectory controller
     circle_controller.py    # circular trajectory controller
     laser_controller.py     # laser target controller
+    radio_jamming_controller.py # fixed-range radio-jamming controller
     record.py               # snapshot/video helper
     camera_recorder.py      # Gazebo camera frame converter
     target_filters.py       # optional 3D world-target filters
+    target_geometry.py      # shared countermeasure aiming geometry
     yolo_detector.py        # YOLO detector publishing raw target pixels
   launch/
     sim.launch.py

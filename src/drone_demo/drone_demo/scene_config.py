@@ -19,6 +19,9 @@ FALLBACK_SCENE_DEFAULTS = {
     "weapon_x": 7.9601,
     "weapon_y": -7.4600,
     "weapon_z": 1.5000,
+    "jammer_x": 7.5500,
+    "jammer_y": -8.4500,
+    "jammer_z": 1.4500,
 }
 
 
@@ -90,6 +93,7 @@ def scene_defaults_from_sdf(world_file=None):
         root = ET.parse(world_file).getroot()
         camera_model = root.find(".//model[@name='ground_camera']")
         weapon_model = root.find(".//model[@name='weapon_platform']")
+        jammer_model = root.find(".//model[@name='radio_jammer']")
         if camera_model is None or weapon_model is None:
             return FALLBACK_SCENE_DEFAULTS.copy()
 
@@ -127,6 +131,24 @@ def scene_defaults_from_sdf(world_file=None):
             else (0.0, 0.0, 1.5, 0.0, 0.0, 0.0)
         )
         weapon_pos = transform_point(weapon_pose, muzzle_pose)
+
+        if jammer_model is not None:
+            jammer_pose = direct_pose(jammer_model)
+            antenna_mount = jammer_model.find(
+                ".//visual[@name='antenna_mount']"
+            )
+            mount_pose = (
+                direct_pose(antenna_mount)
+                if antenna_mount is not None
+                else (0.0, 0.0, 1.45, 0.0, 0.0, 0.0)
+            )
+            jammer_pos = transform_point(jammer_pose, mount_pose)
+        else:
+            jammer_pos = (
+                FALLBACK_SCENE_DEFAULTS["jammer_x"],
+                FALLBACK_SCENE_DEFAULTS["jammer_y"],
+                FALLBACK_SCENE_DEFAULTS["jammer_z"],
+            )
     except (OSError, TypeError, ET.ParseError, ValueError):
         return FALLBACK_SCENE_DEFAULTS.copy()
 
@@ -143,4 +165,7 @@ def scene_defaults_from_sdf(world_file=None):
         "weapon_x": weapon_pos[0],
         "weapon_y": weapon_pos[1],
         "weapon_z": weapon_pos[2],
+        "jammer_x": jammer_pos[0],
+        "jammer_y": jammer_pos[1],
+        "jammer_z": jammer_pos[2],
     }

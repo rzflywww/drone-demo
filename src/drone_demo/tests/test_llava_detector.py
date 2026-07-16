@@ -1,7 +1,10 @@
 import unittest
 from unittest.mock import MagicMock, call, patch
 
+import numpy as np
+
 from drone_demo.llava_detector import (
+    DEFAULT_TARGET_TOPIC,
     RemoteLlavaDetector,
     answer_contains_trigger,
     generation_request_data,
@@ -90,8 +93,11 @@ class YoloHandoffTriggerTest(unittest.TestCase):
         self.detector.auto_start_laser = True
         self.detector._trigger_handled = False
         self.detector._tracking_handed_off = False
+        self.detector._llava_tracking_locked = False
         self.detector._managed_processes = {}
         self.detector.laser_trigger_phrase = "laser strikes"
+        self.detector.radio_jamming_phrase = "radio jamming"
+        self.detector.auto_start_radio_jamming = False
         self.detector.ros_node = MagicMock()
         self.detector.target_pub = MagicMock()
         self.detector._wait_for_nodes = MagicMock(return_value=True)
@@ -152,6 +158,96 @@ class YoloHandoffTriggerTest(unittest.TestCase):
 
         self.assertFalse(self.detector.process_latest_frame())
         post.assert_not_called()
+
+
+class RadioJammingTrackingTest(unittest.TestCase):
+    def setUp(self):
+        self.detector = RemoteLlavaDetector.__new__(RemoteLlavaDetector)
+        self.detector.auto_start_laser = True
+        self.detector._trigger_handled = False
+        self.detector._tracking_handed_off = False
+        self.detector._llava_tracking_locked = False
+        self.detector._managed_processes = {}
+        self.detector.laser_trigger_phrase = "laser strikes"
+        self.detector.radio_jamming_phrase = "radio jamming"
+        self.detector.auto_start_radio_jamming = False
+        self.detector.ros_node = MagicMock()
+        self.detector.target_pub = MagicMock()
+
+    @patch("drone_demo.llava_detector.subprocess.Popen")
+    def test_radio_jamming_locks_llava_and_blocks_later_yolo_handoff(self, popen):
+        locked = self.detector._maybe_lock_llava_tracking(
+            "The selected plan is RADIO JAMMING."
+        )
+        handed_off = self.detector._maybe_handoff_to_yolo(
+            "Use laser strikes."
+        )
+
+        self.assertTrue(locked)
+        self.assertTrue(self.detector._llava_tracking_locked)
+        self.assertFalse(handed_off)
+        self.assertFalse(self.detector._tracking_handed_off)
+        popen.assert_not_called()
+
+    def test_radio_jamming_starts_only_the_radio_controller(self):
+        self.detector.auto_start_radio_jamming = True
+        self.detector._start_managed_node = MagicMock(return_value=True)
+        self.detector._wait_for_nodes = MagicMock(return_value=True)
+
+        locked = self.detector._maybe_lock_llava_tracking("Use radio jamming.")
+
+        self.assertTrue(locked)
+        self.detector._start_managed_node.assert_called_once_with(
+            "radio_jamming_controller",
+            "radio_jamming_controller",
+        )
+        self.detector._wait_for_nodes.assert_called_once_with(
+            {"radio_jamming_controller"}
+        )
+
+    def test_laser_phrase_takes_precedence_when_both_phrases_are_present(self):
+        locked = self.detector._maybe_lock_llava_tracking(
+            "Consider radio jamming, then use laser strikes."
+        )
+
+        self.assertFalse(locked)
+        self.assertFalse(self.detector._llava_tracking_locked)
+
+    @patch("drone_demo.llava_detector.requests.post")
+    def test_radio_jamming_response_publishes_llava_center(self, post):
+        self.detector._latest_frame = np.zeros((360, 640, 3), dtype=np.uint8)
+        self.detector._latest_frame_id = 7
+        self.detector._processed_frame_id = 0
+        self.detector._last_request_time = 0.0
+        self.detector.interval = 0.0
+        self.detector.jpeg_quality = 85
+        self.detector.locate_url = "http://127.0.0.1:8000/locate"
+        self.detector.prompt = "choose a response"
+        self.detector.do_sample = True
+        self.detector.temperature = 0.95
+        self.detector.top_p = 0.7
+        self.detector.max_new_tokens = 128
+        self.detector.timeout = 120.0
+
+        response = MagicMock()
+        response.json.return_value = {
+            "found": True,
+            "center": [321.0, 182.0],
+            "request_id": 7,
+            "raw_answer": "Use radio jamming.",
+        }
+        post.return_value = response
+
+        processed = self.detector.process_latest_frame()
+
+        self.assertTrue(processed)
+        self.assertTrue(self.detector._llava_tracking_locked)
+        self.detector.target_pub.publish.assert_called_once()
+        message = self.detector.target_pub.publish.call_args.args[0]
+        self.assertEqual((message.x, message.y, message.z), (321.0, 182.0, 0.0))
+
+    def test_default_target_topic_is_countermeasure_topic(self):
+        self.assertEqual(DEFAULT_TARGET_TOPIC, "/countermeasure_target_pixel")
 
 
 if __name__ == "__main__":
